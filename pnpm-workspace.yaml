@@ -1,0 +1,4 @@
+# pnpm 11+ requires an explicit allowlist for postinstall build scripts.
+# esbuild (via tsup) downloads its platform binary.
+allowBuilds:
+  esbuild: true

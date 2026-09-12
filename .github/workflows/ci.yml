@@ -1,0 +1,19 @@
+name: ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  ci:
+    uses: tinbee/ci-workflows/.github/workflows/node-pnpm-ci.yml@v1
+    with:
+      typecheck_command: pnpm typecheck
+      build_command: pnpm build
+      test_command: pnpm test
