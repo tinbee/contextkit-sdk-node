@@ -11,9 +11,32 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # The ruleset requires the check "ci / CI" — <this job id> / <inner job
+  # name in ci-workflows>. The ruleset-drift job guards the two halves this
+  # repo controls: the context in .github/rulesets/main.json and this job's
+  # id. It cannot see a rename of the inner job in tinbee/ci-workflows; that
+  # shows up as a PR stuck BLOCKED with every check green. `needs` makes a
+  # drift failure fail the required check too, instead of only its own.
   ci:
+    needs: ruleset-drift
     uses: tinbee/ci-workflows/.github/workflows/node-pnpm-ci.yml@v1
     with:
       typecheck_command: pnpm typecheck
       build_command: pnpm build
       test_command: pnpm test
+
+  ruleset-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Sanity-check branch protection (drift guard)
+        run: |
+          set -euo pipefail
+          EXPECTED="ci / CI"
+          RULESET_CTX=$(jq -r '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context' .github/rulesets/main.json)
+          if [ "$RULESET_CTX" != "$EXPECTED" ]; then
+            echo "::error ::DRIFT: ruleset context '$RULESET_CTX' != reported check '$EXPECTED'"
+            exit 1
+          fi
+          grep -qE '^[[:space:]]+ci:[[:space:]]*$' .github/workflows/ci.yml || { echo "::error ::caller job id is no longer 'ci'"; exit 1; }
+          echo "✓ workflow + ruleset agree on '$EXPECTED'"
