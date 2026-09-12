@@ -38,5 +38,5 @@ jobs:
             echo "::error ::DRIFT: ruleset context '$RULESET_CTX' != reported check '$EXPECTED'"
             exit 1
           fi
-          grep -qE '^\s+ci:\s*$' .github/workflows/ci.yml || { echo "::error ::caller job id is no longer 'ci'"; exit 1; }
+          grep -qE '^[[:space:]]+ci:[[:space:]]*$' .github/workflows/ci.yml || { echo "::error ::caller job id is no longer 'ci'"; exit 1; }
           echo "✓ workflow + ruleset agree on '$EXPECTED'"
