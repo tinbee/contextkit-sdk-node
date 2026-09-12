@@ -1,0 +1,7 @@
+# Code owners for tinbee/contextkit-sdk-node.
+#
+# Consumed by the branch-protection ruleset (.github/rulesets/main.json)
+# when require_code_owner_review is true. Currently the gate is OFF (solo
+# workflow); this file is staged for when a teammate is added.
+
+*       @mkurtay

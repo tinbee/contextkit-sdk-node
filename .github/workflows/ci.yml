@@ -11,9 +11,28 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # The ruleset requires the check "ci / CI" — <this job id> / <inner job
+  # name>. Renaming this job or the reusable workflow's job breaks the gate;
+  # the ruleset-drift job below fails the build if the two disagree.
   ci:
     uses: tinbee/ci-workflows/.github/workflows/node-pnpm-ci.yml@v1
     with:
       typecheck_command: pnpm typecheck
       build_command: pnpm build
       test_command: pnpm test
+
+  ruleset-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Sanity-check branch protection (drift guard)
+        run: |
+          set -euo pipefail
+          EXPECTED="ci / CI"
+          RULESET_CTX=$(jq -r '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context' .github/rulesets/main.json)
+          if [ "$RULESET_CTX" != "$EXPECTED" ]; then
+            echo "::error ::DRIFT: ruleset context '$RULESET_CTX' != reported check '$EXPECTED'"
+            exit 1
+          fi
+          grep -qE '^\s+ci:\s*$' .github/workflows/ci.yml || { echo "::error ::caller job id is no longer 'ci'"; exit 1; }
+          echo "✓ workflow + ruleset agree on '$EXPECTED'"
