@@ -12,9 +12,13 @@ concurrency:
 
 jobs:
   # The ruleset requires the check "ci / CI" — <this job id> / <inner job
-  # name>. Renaming this job or the reusable workflow's job breaks the gate;
-  # the ruleset-drift job below fails the build if the two disagree.
+  # name in ci-workflows>. The ruleset-drift job guards the two halves this
+  # repo controls: the context in .github/rulesets/main.json and this job's
+  # id. It cannot see a rename of the inner job in tinbee/ci-workflows; that
+  # shows up as a PR stuck BLOCKED with every check green. `needs` makes a
+  # drift failure fail the required check too, instead of only its own.
   ci:
+    needs: ruleset-drift
     uses: tinbee/ci-workflows/.github/workflows/node-pnpm-ci.yml@v1
     with:
       typecheck_command: pnpm typecheck
