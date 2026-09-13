@@ -56,7 +56,7 @@ jobs:
         run: |
           set -uo pipefail
           npm publish --provenance 2>&1 \
-            | sed -E 's/(Bearer |[Aa]uthorization[":= ]+)[^ "]+/\1***/g; s/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/***JWT***/g'
+            | sed -E 's/([Aa]uthorization[":= ]+(Bearer )?)[^ "]+/\1***/g; s/(Bearer )[^ "]+/\1***/g; s/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/***JWT***/g'
           exit "${PIPESTATUS[0]}"
         env:
           NPM_CONFIG_LOGLEVEL: verbose
