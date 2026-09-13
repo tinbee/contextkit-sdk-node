@@ -1,5 +1,5 @@
 import { ContextKit, toTokenSet } from "../client.js";
-import { TokenRevokedError, ValidationError } from "../errors.js";
+import { ApiError, TokenRevokedError, ValidationError } from "../errors.js";
 import { fakeFetch, tokenBody } from "./fake-fetch.js";
 
 const CLIENT_ID = "11111111-1111-4111-8111-111111111111";
@@ -99,6 +99,35 @@ describe("ContextKit.refresh", () => {
       const fetch = fakeFetch(() => ({ status, body: { statusCode: status, message: "invalid" } }));
       await expect(client(fetch).refresh("dead")).rejects.toBeInstanceOf(TokenRevokedError);
     }
+  });
+});
+
+describe("ContextKit.revokeToken", () => {
+  it("posts the token with the client credentials and resolves with nothing", async () => {
+    const fetch = fakeFetch(() => ({ status: 200 }));
+    await expect(client(fetch).revokeToken("ckr_dead")).resolves.toBeUndefined();
+    expect(fetch.calls[0]?.url).toBe("https://api.test/v1/oauth/revoke");
+    expect(fetch.calls[0]?.body).toEqual({
+      clientId: CLIENT_ID,
+      clientSecret: "shh",
+      token: "ckr_dead",
+    });
+  });
+
+  it("turns the route's only 401 — bad client credentials — into ApiError, not TokenRevoked", async () => {
+    const fetch = fakeFetch(() => ({ status: 401, body: { message: "invalid_client" } }));
+    const err = await client(fetch)
+      .revokeToken("ckr_x")
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).not.toBeInstanceOf(TokenRevokedError);
+    expect((err as ApiError).status).toBe(401);
+  });
+
+  it("refuses an empty token before any request", async () => {
+    const fetch = fakeFetch(() => ({}));
+    await expect(client(fetch).revokeToken("")).rejects.toThrow(/token is required/);
+    expect(fetch.calls).toHaveLength(0);
   });
 });
 

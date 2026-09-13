@@ -74,6 +74,21 @@ const answer = await ckUser.answers.verifyZone({
 // answer.state is "inside" | "outside" | "unknown" — unknown is a value, not an error
 ```
 
+## Disconnect a user
+
+When a user disconnects ContextKit inside your product, end the connection on
+ContextKit too. This revokes the whole grant — every token, every rule — and the
+handle then refuses further calls with `TokenRevokedError`.
+
+```ts
+await ckUser.disconnect();
+await db.users.update(user.id, { contextkit: null });
+```
+
+If all you have left is a stored token, `ck.revokeToken(token)` does the same
+without a handle. Either kind of token works, and revoking one that is already
+dead is a success, not an error.
+
 ## Errors
 
 Every failure is a `ContextKitError`; the subclass says what to do.

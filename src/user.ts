@@ -95,6 +95,12 @@ export interface CreateZoneRuleParams extends BaseRuleParams {
   label: string;
 }
 
+/** What the app-level client lends a per-user handle. */
+export interface UserClientBackend {
+  refresh: (refreshToken: string) => Promise<TokenSet>;
+  revoke: (token: string) => Promise<void>;
+}
+
 /**
  * All calls for one connected user. Handles access-token refresh: refreshes
  * before expiry, retries once on 401, and raises TokenRevokedError when a
@@ -103,11 +109,12 @@ export interface CreateZoneRuleParams extends BaseRuleParams {
 export class UserClient {
   private tokens: UserTokens;
   private refreshing: Promise<TokenSet> | null = null;
+  private disconnected = false;
 
   constructor(
     private readonly http: HttpOptions,
     private readonly apiBaseUrl: string,
-    private readonly refreshImpl: (refreshToken: string) => Promise<TokenSet>,
+    private readonly backend: UserClientBackend,
     tokens: UserTokens,
     private readonly options: UserClientOptions,
   ) {
@@ -118,6 +125,23 @@ export class UserClient {
   /** The tokens this client currently holds. */
   currentTokens(): Readonly<UserTokens> {
     return this.tokens;
+  }
+
+  /**
+   * End this user's connection: the user pressed "disconnect" in your
+   * product. Revokes the whole grant on ContextKit — every token, every
+   * rule — and then refuses further calls on this handle with
+   * TokenRevokedError, without a network round trip. Drop the stored tokens
+   * once it resolves; to connect again the user goes through consent.
+   * Safe to call twice.
+   */
+  async disconnect(): Promise<void> {
+    if (this.disconnected) return;
+    // Wait for any refresh in flight: the token it is about to hand back is
+    // the one that must be revoked, and the one we hold is about to be spent.
+    if (this.refreshing) await this.refreshing.catch(() => undefined);
+    await this.backend.revoke(this.tokens.refreshToken);
+    this.disconnected = true;
   }
 
   readonly answers = {
@@ -276,6 +300,11 @@ export class UserClient {
   // -------------------------------------------------------------------------
 
   private async call<T>(req: Omit<HttpRequest, "headers">): Promise<T> {
+    if (this.disconnected) {
+      throw new TokenRevokedError(
+        "this connection was ended by disconnect(); the user must reconnect",
+      );
+    }
     let accessToken = await this.accessToken();
     try {
       return await this.send<T>(req, accessToken);
@@ -313,7 +342,8 @@ export class UserClient {
    *  use of a rotated refresh token is treated as replay and kills the grant. */
   private refresh(): Promise<TokenSet> {
     if (!this.refreshing) {
-      this.refreshing = this.refreshImpl(this.tokens.refreshToken)
+      this.refreshing = this.backend
+        .refresh(this.tokens.refreshToken)
         .then(async (next) => {
           this.tokens = {
             refreshToken: next.refreshToken,

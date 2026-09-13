@@ -12,6 +12,7 @@ export {
   type CreatePlaceRuleParams,
   type CreateZoneRuleParams,
   type RangeParams,
+  type UserClientBackend,
   type UserClientOptions,
   type UserTokens,
   type VerifyZoneParams,
