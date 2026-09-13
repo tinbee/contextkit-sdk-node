@@ -1,14 +1,20 @@
 name: release
 
-# Publishes to npm when a v* tag is pushed. Needs NPM_TOKEN (automation token
-# for the contextkit-sdk package) in the repo's Actions secrets.
+# Publishes to npm via Trusted Publishing (OIDC) when a v* tag is pushed.
+# No npm token exists anywhere: npmjs.com is configured to trust this exact
+# repository + workflow file, and exchanges the job's OIDC token for a
+# short-lived publish credential. Provenance is attached automatically.
+#
+# One-time setup on npmjs.com → package contextkit-sdk → Settings →
+# Trusted Publisher → GitHub Actions:
+#   owner: tinbee · repository: contextkit-sdk-node · workflow: release.yml
 on:
   push:
     tags: ["v*"]
 
 permissions:
   contents: read
-  id-token: write
+  id-token: write # the OIDC token npm exchanges for publish rights
 
 jobs:
   publish:
@@ -19,8 +25,14 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-          registry-url: https://registry.npmjs.org
           cache: pnpm
+      # Trusted Publishing needs npm >= 11.5.1; Node 22 ships npm 10.
+      - name: Upgrade npm for OIDC publishing
+        run: |
+          set -euo pipefail
+          npm install -g npm@latest
+          npm --version
+          node -e 'const [a,b,c]=require("child_process").execSync("npm --version").toString().trim().split(".").map(Number); if (a<11||(a===11&&(b<5||(b===5&&c<1)))) { console.error("npm >= 11.5.1 required for trusted publishing"); process.exit(1) }'
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck && pnpm test && pnpm build
       - name: Refuse a tag that does not match package.json
@@ -29,6 +41,6 @@ jobs:
           TAG="${GITHUB_REF_NAME#v}"
           PKG="$(node -p "require('./package.json').version")"
           [ "$TAG" = "$PKG" ] || { echo "tag v$TAG != package.json $PKG"; exit 1; }
-      - run: pnpm publish --no-git-checks --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # npm, not pnpm: the OIDC exchange is implemented in the npm CLI.
+      # prepublishOnly re-runs typecheck/test/build; cheap insurance.
+      - run: npm publish --access public --provenance
