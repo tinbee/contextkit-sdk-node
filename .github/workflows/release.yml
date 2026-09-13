@@ -8,7 +8,8 @@ name: release
 # One-time setup on npmjs.com → package @tinbee/contextkit-sdk → Settings →
 # Trusted Publisher → GitHub Actions:
 #   owner: tinbee · repository: contextkit-sdk-node · workflow: release.yml
-# The package is @tinbee/contextkit-sdk; publishConfig pins public access.
+# The package is @tinbee/contextkit-sdk; publishConfig pins public access
+# (scoped packages default to restricted).
 on:
   push:
     tags: ["v*"]
@@ -44,4 +45,6 @@ jobs:
       # npm, not pnpm: the OIDC exchange is implemented in the npm CLI. The
       # typecheck/test/build gate runs ONCE here, via package.json's
       # prepublishOnly, so a red build can never be published.
-      - run: npm publish
+      # --provenance here, not in publishConfig: npm can only generate it inside
+      # a CI provider, so pinning it in package.json breaks a manual publish.
+      - run: npm publish --provenance
