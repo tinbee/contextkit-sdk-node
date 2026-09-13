@@ -65,6 +65,7 @@ export interface VisitsListParams {
 }
 
 export interface RangeParams {
+  /** At most 31 days apart; page by month for longer histories. */
   from: string;
   to: string;
   deviceId?: string;
@@ -72,6 +73,11 @@ export interface RangeParams {
   /** 1–5000 */
   limit?: number;
   cursor?: string;
+  /**
+   * At most one point per this many seconds (0–3600). The API's default is
+   * 300; pass 0 to ask for every fix, which is deliberately explicit.
+   */
+  minIntervalS?: number;
 }
 
 interface BaseRuleParams {
@@ -223,6 +229,7 @@ export class UserClient {
           source: params.source,
           limit: params.limit,
           cursor: params.cursor,
+          min_interval_s: params.minIntervalS,
         },
       }),
 
