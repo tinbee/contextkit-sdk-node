@@ -74,6 +74,25 @@ const answer = await ckUser.answers.verifyZone({
 // answer.state is "inside" | "outside" | "unknown" — unknown is a value, not an error
 ```
 
+## Rules with a window
+
+A rule tied to a date should say so. Outside its window it is not evaluated,
+and it counts against the ten-rules-per-connection cap only while the window
+is open, so an itinerary's worth of one-day windows fits in a single slot.
+
+```ts
+await ckUser.rules.createZone({
+  type: "enter",
+  lat: 41.9028,
+  lon: 12.4964,
+  radiusM: 300,
+  label: "Hotel Artemide",
+  activeFrom: checkIn.minus({ days: 1 }),
+  activeUntil: checkIn.plus({ hours: 12 }),
+  webhookUrl: "https://yourapp.example/hooks/contextkit",
+});
+```
+
 ## Disconnect a user
 
 When a user disconnects ContextKit inside your product, end the connection on

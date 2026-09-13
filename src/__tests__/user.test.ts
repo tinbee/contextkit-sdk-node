@@ -258,6 +258,25 @@ describe("UserClient rules + subscriptions", () => {
     });
   });
 
+  it("createZone sends an active window as ISO strings, from strings or Dates", async () => {
+    const { ck, fetch } = make(() => ({ body: { id: "r1", secret: "s1" } }));
+    await ck.forUser(fresh).rules.createZone({
+      type: "enter",
+      lat: 41.9,
+      lon: 12.5,
+      radiusM: 300,
+      label: "Hotel Artemide",
+      activeFrom: new Date("2026-09-19T12:00:00Z"),
+      activeUntil: "2026-09-21T00:00:00.000Z",
+      webhookUrl: "https://paperowl.test/hooks/ck",
+    });
+    expect(fetch.calls[0]?.body).toMatchObject({
+      active_from: "2026-09-19T12:00:00.000Z",
+      active_until: "2026-09-21T00:00:00.000Z",
+    });
+    expect(fetch.calls[0]?.body).not.toHaveProperty("dwell_minutes");
+  });
+
   it("register posts events + webhook_url", async () => {
     const { ck, fetch } = make(() => ({ body: { id: "sub1", secret: "s" } }));
     await ck

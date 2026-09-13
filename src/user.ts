@@ -80,6 +80,14 @@ interface BaseRuleParams {
   dwellMinutes?: number;
   /** 30–3600; deliveries older than this are abandoned, not retried. */
   maxEventAgeS?: number;
+  /**
+   * The window the rule is evaluated in (ISO 8601 or Date). Either end is
+   * optional; omit both for a standing rule. A rule counts against the
+   * per-connection cap of ten only while its window is open, so a trip's
+   * worth of one-day windows fits where ten standing rules would not.
+   */
+  activeFrom?: string | Date;
+  activeUntil?: string | Date;
   /** https only. */
   webhookUrl: string;
 }
@@ -367,6 +375,8 @@ function ruleBody(params: BaseRuleParams): Record<string, unknown> {
     webhook_url: params.webhookUrl,
     ...(params.dwellMinutes !== undefined ? { dwell_minutes: params.dwellMinutes } : {}),
     ...(params.maxEventAgeS !== undefined ? { max_event_age_s: params.maxEventAgeS } : {}),
+    ...(params.activeFrom !== undefined ? { active_from: isoString(params.activeFrom) } : {}),
+    ...(params.activeUntil !== undefined ? { active_until: isoString(params.activeUntil) } : {}),
   };
 }
 
@@ -374,4 +384,8 @@ function assertRange(name: string, value: number, min: number, max: number): voi
   if (!Number.isInteger(value) || value < min || value > max) {
     throw new RangeError(`${name} must be an integer between ${min} and ${max}, got ${value}`);
   }
+}
+
+function isoString(value: string | Date): string {
+  return value instanceof Date ? value.toISOString() : value;
 }
