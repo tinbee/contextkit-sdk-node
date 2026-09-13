@@ -170,6 +170,37 @@ describe("UserClient token lifecycle", () => {
   });
 });
 
+describe("UserClient.disconnect", () => {
+  it("revokes the refresh token it holds, then refuses further calls without a request", async () => {
+    const { ck, fetch } = make(() => ({ status: 200 }));
+    const user = ck.forUser(fresh);
+    await user.disconnect();
+    expect(fetch.calls.map((c) => c.url.replace("https://api.test", ""))).toEqual([
+      "/v1/oauth/revoke",
+    ]);
+    expect(fetch.calls[0]?.body).toMatchObject({ token: "rt-0" });
+    await expect(user.answers.places()).rejects.toBeInstanceOf(TokenRevokedError);
+    expect(fetch.calls).toHaveLength(1);
+  });
+
+  it("is idempotent, and revokes the CURRENT refresh token after a rotation", async () => {
+    const { ck, fetch } = make((req) =>
+      isToken(req)
+        ? { body: tokenBody({ refresh_token: "rt-1" }) }
+        : req.url.endsWith("/v1/oauth/revoke")
+          ? { status: 200 }
+          : { body: { version: 1, places: [] } },
+    );
+    const user = ck.forUser({ refreshToken: "rt-0" });
+    await user.answers.places(); // rotates rt-0 → rt-1
+    await user.disconnect();
+    await user.disconnect();
+    const revokes = fetch.calls.filter((c) => c.url.endsWith("/v1/oauth/revoke"));
+    expect(revokes).toHaveLength(1);
+    expect(revokes[0]?.body).toMatchObject({ token: "rt-1" });
+  });
+});
+
 describe("UserClient error mapping", () => {
   it("429 → RateLimitedError with Retry-After", async () => {
     const { ck } = make(() => ({

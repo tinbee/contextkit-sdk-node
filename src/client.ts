@@ -1,4 +1,4 @@
-import { TokenRevokedError, ValidationError } from "./errors.js";
+import { ApiError, TokenRevokedError, ValidationError } from "./errors.js";
 import { type FetchLike, type HttpOptions, UnauthorizedSignal, request } from "./http.js";
 import { codeChallenge } from "./pkce.js";
 import { type AppScope, type TokenResponse, type TokenSet, isAppScope } from "./types.js";
@@ -114,9 +114,43 @@ export class ContextKit {
     return this.token({ grantType: "refresh_token", refreshToken });
   }
 
+  /**
+   * End a user's connection (RFC 7009). Revokes the WHOLE grant the token
+   * belongs to — every access and refresh token, every rule — not just the
+   * token passed. Either kind of token works. Resolves for an unknown,
+   * expired or already-revoked token too: revocation is idempotent, and the
+   * API deliberately does not say which it was. `forUser(...).disconnect()`
+   * is the usual entry point; call this directly when all you have left is
+   * a stored token.
+   */
+  async revokeToken(token: string): Promise<void> {
+    if (!token) throw new Error("revokeToken: token is required");
+    try {
+      await request<unknown>(this.http, {
+        method: "POST",
+        url: `${this.apiBaseUrl}/v1/oauth/revoke`,
+        body: { clientId: this.clientId, clientSecret: this.clientSecret, token },
+      });
+    } catch (err) {
+      // The only 401 this route gives is for the CLIENT credentials; the
+      // token's own state never fails the call. So it is a configuration
+      // error, not a revoked grant.
+      if (err instanceof UnauthorizedSignal) {
+        throw new ApiError("revokeToken: client credentials were rejected", 401, err.body);
+      }
+      throw err;
+    }
+  }
+
   /** A handle that makes calls as one connected user. */
   forUser(tokens: UserTokens, options: UserClientOptions = {}): UserClient {
-    return new UserClient(this.http, this.apiBaseUrl, (rt) => this.refresh(rt), tokens, options);
+    return new UserClient(
+      this.http,
+      this.apiBaseUrl,
+      { refresh: (rt) => this.refresh(rt), revoke: (token) => this.revokeToken(token) },
+      tokens,
+      options,
+    );
   }
 
   private async token(body: Record<string, string>): Promise<TokenSet> {
