@@ -1,11 +1,11 @@
 {
-  "name": "contextkit-sdk",
+  "name": "@tinbee/contextkit-sdk",
   "version": "0.1.0",
   "description": "Node.js SDK for ContextKit \u2014 ask scoped questions about a user's location without holding their coordinates.",
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tinbee/contextkit-sdk-node.git"
+    "url": "git+https://github.com/tinbee/contextkit-sdk-node.git"
   },
   "homepage": "https://docs.contextkit.com",
   "keywords": [
@@ -36,6 +36,10 @@
     "dist",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "sideEffects": false,
   "engines": {
     "node": ">=20"
