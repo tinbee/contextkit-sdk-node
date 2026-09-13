@@ -86,6 +86,9 @@ export class ContextKit {
       );
     }
     const url = new URL(`${this.authorizeBaseUrl}/authorize`);
+    // RFC 6749 §4.1.1 requires it, and the consent page refuses a link
+    // without it. Omitted through 0.2.0; every integrator had to add it.
+    url.searchParams.set("response_type", "code");
     url.searchParams.set("client_id", this.clientId);
     url.searchParams.set("redirect_uri", params.redirectUri);
     url.searchParams.set("scope", params.scopes.join(" "));
