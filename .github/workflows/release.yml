@@ -47,8 +47,16 @@ jobs:
       # prepublishOnly, so a red build can never be published.
       # --provenance here, not in publishConfig: npm can only generate it inside
       # a CI provider, so pinning it in package.json breaks a manual publish.
-      - run: npm publish --provenance
+      # Verbose so a failed OIDC exchange says WHY (npm's "oidc:" lines only
+      # appear at this level). At that level npm can also echo the job's
+      # short-lived OIDC JWT and bearer headers, and this is a public run log,
+      # so the output is redacted before it is written. PIPESTATUS keeps
+      # npm's exit code as the step's.
+      - name: npm publish (provenance, verbose, redacted)
+        run: |
+          set -uo pipefail
+          npm publish --provenance 2>&1 \
+            | sed -E 's/(Bearer |[Aa]uthorization[":= ]+)[^ "]+/\1***/g; s/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/***JWT***/g'
+          exit "${PIPESTATUS[0]}"
         env:
-          # Verbose so a failed OIDC exchange says WHY (npm's "oidc:" lines
-          # only appear at this level). Cheap on success; decisive on failure.
           NPM_CONFIG_LOGLEVEL: verbose
