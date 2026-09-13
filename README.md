@@ -1,4 +1,4 @@
-# contextkit-sdk
+# @tinbee/contextkit-sdk
 
 Node.js SDK for [ContextKit](https://contextkit.com). Ask scoped questions about a
 connected user's location — "are they inside this zone right now?" — without ever
@@ -8,7 +8,7 @@ Full documentation lives at **[docs.contextkit.com](https://docs.contextkit.com)
 This README covers only the connect flow.
 
 ```sh
-pnpm add contextkit-sdk
+pnpm add @tinbee/contextkit-sdk
 ```
 
 Node 20+. Server-side only: the client secret must never reach a browser.
@@ -20,7 +20,7 @@ ContextKit uses OAuth 2 with PKCE. Three steps, all on your backend.
 **1. Send the user to consent.** Keep `state` and the verifier in the user's session.
 
 ```ts
-import { ContextKit, generateCodeVerifier, generateState } from "contextkit-sdk";
+import { ContextKit, generateCodeVerifier, generateState } from "@tinbee/contextkit-sdk";
 
 const ck = new ContextKit({
   clientId: process.env.CONTEXTKIT_CLIENT_ID!,
@@ -92,7 +92,7 @@ Every failure is a `ContextKitError`; the subclass says what to do.
 Rules and subscriptions deliver signed POSTs. Verify with the **raw** body bytes.
 
 ```ts
-import { verifyWebhook, isRuleEvent } from "contextkit-sdk";
+import { verifyWebhook, isRuleEvent } from "@tinbee/contextkit-sdk";
 
 app.post("/hooks/contextkit", express.raw({ type: "application/json" }), async (req, res) => {
   let event;

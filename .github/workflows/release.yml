@@ -5,9 +5,10 @@ name: release
 # repository + workflow file, and exchanges the job's OIDC token for a
 # short-lived publish credential. Provenance is attached automatically.
 #
-# One-time setup on npmjs.com → package contextkit-sdk → Settings →
+# One-time setup on npmjs.com → package @tinbee/contextkit-sdk → Settings →
 # Trusted Publisher → GitHub Actions:
 #   owner: tinbee · repository: contextkit-sdk-node · workflow: release.yml
+# The package is @tinbee/contextkit-sdk; publishConfig pins public access.
 on:
   push:
     tags: ["v*"]
@@ -43,4 +44,4 @@ jobs:
           [ "$TAG" = "$PKG" ] || { echo "tag v$TAG != package.json $PKG"; exit 1; }
       # npm, not pnpm: the OIDC exchange is implemented in the npm CLI.
       # prepublishOnly re-runs typecheck/test/build; cheap insurance.
-      - run: npm publish --access public --provenance
+      - run: npm publish
