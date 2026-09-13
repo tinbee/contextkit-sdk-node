@@ -147,6 +147,10 @@ app.post("/hooks/contextkit", express.raw({ type: "application/json" }), async (
 });
 ```
 
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
+
 ## Development
 
 ```sh
