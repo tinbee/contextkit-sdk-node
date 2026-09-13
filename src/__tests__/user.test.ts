@@ -277,6 +277,40 @@ describe("UserClient rules + subscriptions", () => {
     expect(fetch.calls[0]?.body).not.toHaveProperty("dwell_minutes");
   });
 
+  it("createPlace serializes the window the same way", async () => {
+    const { ck, fetch } = make(() => ({ body: { id: "r2", secret: "s2" } }));
+    await ck.forUser(fresh).rules.createPlace({
+      type: "enter",
+      placeId: "p1",
+      activeFrom: "2026-09-19T12:00:00Z",
+      activeUntil: new Date("2026-09-21T00:00:00Z"),
+      webhookUrl: "https://paperowl.test/hooks/ck",
+    });
+    expect(fetch.calls[0]?.body).toEqual({
+      place_id: "p1",
+      type: "enter",
+      webhook_url: "https://paperowl.test/hooks/ck",
+      active_from: "2026-09-19T12:00:00Z",
+      active_until: "2026-09-21T00:00:00.000Z",
+    });
+  });
+
+  it("names the field when handed a Date that is not a date", async () => {
+    const { ck, fetch } = make(() => ({}));
+    await expect(
+      ck.forUser(fresh).rules.createZone({
+        type: "enter",
+        lat: 1,
+        lon: 2,
+        radiusM: 300,
+        label: "Hotel",
+        activeUntil: new Date(NaN),
+        webhookUrl: "https://paperowl.test/hooks/ck",
+      }),
+    ).rejects.toThrow(/activeUntil: invalid Date/);
+    expect(fetch.calls).toHaveLength(0);
+  });
+
   it("register posts events + webhook_url", async () => {
     const { ck, fetch } = make(() => ({ body: { id: "sub1", secret: "s" } }));
     await ck
