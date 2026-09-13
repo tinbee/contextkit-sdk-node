@@ -196,6 +196,9 @@ export interface RuleSummary {
   target: RuleTarget;
   dwell_minutes: number | null;
   max_event_age_s: number | null;
+  /** The window the rule is evaluated in; null on either side = unbounded. */
+  active_from: string | null;
+  active_until: string | null;
   webhook_url: string;
   disabled_at: string | null;
   created_at: string;
