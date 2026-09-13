@@ -54,7 +54,9 @@ jobs:
       # npm's exit code as the step's.
       - name: npm publish (provenance, verbose, redacted)
         run: |
-          set -uo pipefail
+          # Actions runs bash with -e; turn it off here so a failed pipeline
+          # reaches the PIPESTATUS handling below instead of exiting early.
+          set +e -uo pipefail
           npm publish --provenance 2>&1 \
             | sed -E 's/([Aa]uthorization[":= ]+(Bearer )?)[^ "]+/\1***/g; s/(Bearer )[^ "]+/\1***/g; s/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/***JWT***/g'
           # Fail on EITHER side: a broken redactor must not pass as a clean publish.
