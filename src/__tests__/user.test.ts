@@ -201,6 +201,21 @@ describe("UserClient.disconnect", () => {
   });
 });
 
+describe("UserClient locations", () => {
+  it("range sends min_interval_s and omits it when unset", async () => {
+    const { ck, fetch } = make(() => ({ body: { points: [] } }));
+    const user = ck.forUser(fresh);
+    await user.locations.range({
+      from: "2026-09-01T00:00:00Z",
+      to: "2026-09-02T00:00:00Z",
+      minIntervalS: 0,
+    });
+    expect(fetch.calls[0]?.url).toContain("min_interval_s=0");
+    await user.locations.range({ from: "2026-09-01T00:00:00Z", to: "2026-09-02T00:00:00Z" });
+    expect(fetch.calls[1]?.url).not.toContain("min_interval_s");
+  });
+});
+
 describe("UserClient error mapping", () => {
   it("429 → RateLimitedError with Retry-After", async () => {
     const { ck } = make(() => ({
