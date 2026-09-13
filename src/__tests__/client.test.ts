@@ -27,6 +27,8 @@ describe("ContextKit.authorizeUrl", () => {
       }),
     );
     expect(url.origin + url.pathname).toBe("https://app.test/authorize");
+    // The consent page refuses the link without it (RFC 6749 §4.1.1).
+    expect(url.searchParams.get("response_type")).toBe("code");
     expect(url.searchParams.get("client_id")).toBe(CLIENT_ID);
     expect(url.searchParams.get("redirect_uri")).toBe("https://paperowl.test/cb");
     expect(url.searchParams.get("scope")).toBe("location.verify.zone location.visits.read");
