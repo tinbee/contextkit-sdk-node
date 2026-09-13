@@ -48,3 +48,7 @@ jobs:
       # --provenance here, not in publishConfig: npm can only generate it inside
       # a CI provider, so pinning it in package.json breaks a manual publish.
       - run: npm publish --provenance
+        env:
+          # Verbose so a failed OIDC exchange says WHY (npm's "oidc:" lines
+          # only appear at this level). Cheap on success; decisive on failure.
+          NPM_CONFIG_LOGLEVEL: verbose
