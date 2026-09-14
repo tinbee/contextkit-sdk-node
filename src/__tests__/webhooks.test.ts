@@ -250,7 +250,7 @@ describe("verifyWebhook", () => {
   });
 
   it("refuses a header stuffed with more v1 signatures than a rotation produces", async () => {
-    const header = `${signWebhook(ruleBody, SECRET, NOW)}${",v1=00".repeat(MAX_SIGNATURES)}`;
+    const header = `${signWebhook(ruleBody, SECRET, NOW)}${`,v1=${"0".repeat(64)}`.repeat(MAX_SIGNATURES)}`;
     await expect(
       verifyWebhook({ rawBody: ruleBody, signature: header, secret: SECRET, now: NOW }),
     ).rejects.toThrow(/malformed signature header/);
@@ -293,6 +293,22 @@ describe("verifyWebhook", () => {
         as({ ...base, type: "sensitive.removed", scopes: ["location.lookup"] }),
       ),
     ).toBe(true);
+  });
+
+  it.each([
+    ["too short", "abc"],
+    ["not hex", "z".repeat(64)],
+    ["oversized", "a".repeat(10_000)],
+  ])("refuses a %s v1 signature as malformed", async (_label, sig) => {
+    const header = `${signWebhook(ruleBody, SECRET, NOW)},v1=${sig}`;
+    await expect(
+      verifyWebhook({ rawBody: ruleBody, signature: header, secret: SECRET, now: NOW }),
+    ).rejects.toThrow(/malformed signature header/);
+  });
+
+  it("signWebhook refuses more secrets than verifyWebhook accepts", () => {
+    const secrets = Array.from({ length: MAX_SIGNATURES + 1 }, (_, i) => `s${i}`);
+    expect(() => signWebhook("{}", secrets, NOW)).toThrow(/at most/);
   });
 
   it("signWebhook refuses an empty secret list", () => {

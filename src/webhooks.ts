@@ -17,6 +17,7 @@ export const SIGNATURE_HEADER = "x-contextkit-signature";
 /** A rotation overlap yields two v1 entries; anything far beyond that is a
  *  stuffed header, refused before any HMAC comparison runs. */
 export const MAX_SIGNATURES = 8;
+const V1_SIGNATURE = /^[0-9a-fA-F]{64}$/;
 
 /** Something that remembers event ids it has already accepted. Needed for
  *  replay protection across your own retries or a duplicated delivery. */
@@ -99,6 +100,11 @@ export function signWebhook(
   const buf = Buffer.isBuffer(body) ? body : Buffer.from(body, "utf8");
   const secrets = typeof secret === "string" ? [secret] : secret;
   if (secrets.length === 0) throw new Error("signWebhook needs at least one secret");
+  if (secrets.length > MAX_SIGNATURES) {
+    throw new Error(
+      `signWebhook takes at most ${MAX_SIGNATURES} secrets; verifyWebhook refuses more`,
+    );
+  }
   return [`t=${t}`, ...secrets.map((s) => `v1=${signPayload(buf, t, s)}`)].join(",");
 }
 
@@ -117,6 +123,8 @@ export function parseSignatureHeader(
       if (!Number.isFinite(n)) return null;
       timestamp = n;
     } else if (key === "v1") {
+      // Always a hex SHA-256 HMAC; anything else is refused before any hashing.
+      if (!V1_SIGNATURE.test(value)) return null;
       signatures.push(value.toLowerCase());
     }
     // Unknown keys are ignored so a future v2 does not break v1 receivers.
