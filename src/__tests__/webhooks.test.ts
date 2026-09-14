@@ -1,6 +1,22 @@
 import { WebhookVerificationError } from "../errors.js";
-import { isConnectionEvent, isRuleEvent } from "../types.js";
-import { InMemoryReplayGuard, signWebhook, verifyWebhook } from "../webhooks.js";
+import {
+  type WebhookEvent,
+  isConnectionEvent,
+  isKnownEvent,
+  isPingEvent,
+  isPlacesChangedEvent,
+  isRuleEvent,
+  isSensitiveExpiringEvent,
+  isSensitiveLapsedEvent,
+  isSensitiveRemovedEvent,
+} from "../types.js";
+import {
+  InMemoryReplayGuard,
+  MAX_SIGNATURES,
+  parseSignatureHeader,
+  signWebhook,
+  verifyWebhook,
+} from "../webhooks.js";
 
 const SECRET = "0123456789abcdef0123456789abcdef";
 const NOW = Date.parse("2026-09-12T12:00:00.000Z");
@@ -35,6 +51,25 @@ describe("verifyWebhook", () => {
         now: NOW,
       }),
     ).resolves.toBeDefined();
+  });
+
+  it("joins array header parts, so a rotation signature in a later entry still verifies", async () => {
+    const [t, oldSig, newSig] = signWebhook(ruleBody, ["old-secret", SECRET], NOW).split(",");
+    await expect(
+      verifyWebhook({
+        rawBody: ruleBody,
+        signature: [`${t},${oldSig}`, newSig!],
+        secret: SECRET,
+        now: NOW,
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("rejects array header parts that repeat the timestamp", async () => {
+    const header = signWebhook(ruleBody, SECRET, NOW);
+    await expect(
+      verifyWebhook({ rawBody: ruleBody, signature: [header, header], secret: SECRET, now: NOW }),
+    ).rejects.toThrow(/malformed signature header/);
   });
 
   it("rejects a tampered body", async () => {
@@ -122,6 +157,75 @@ describe("verifyWebhook", () => {
     await expect(verifyWebhook(params)).rejects.toThrow(/already processed/);
   });
 
+  it("accepts a rotation header with two v1 signatures, holding either secret", async () => {
+    const OLD = "old-secret-0123456789abcdef";
+    const NEW = "new-secret-0123456789abcdef";
+    const header = signWebhook(ruleBody, [OLD, NEW], NOW);
+    expect(header.match(/v1=/g)).toHaveLength(2);
+    for (const secret of [OLD, NEW]) {
+      await expect(
+        verifyWebhook({ rawBody: ruleBody, signature: header, secret, now: NOW }),
+      ).resolves.toMatchObject({ event_id: "e1" });
+    }
+    await expect(
+      verifyWebhook({ rawBody: ruleBody, signature: header, secret: "third", now: NOW }),
+    ).rejects.toThrow(/no v1 signature matched/);
+  });
+
+  it("still applies tolerance and the replay guard to a two-signature header", async () => {
+    const header = signWebhook(ruleBody, ["a-secret", SECRET], NOW - 120_000);
+    await expect(
+      verifyWebhook({ rawBody: ruleBody, signature: header, secret: SECRET, now: NOW }),
+    ).rejects.toThrow(/tolerance/);
+    const replayGuard = new InMemoryReplayGuard();
+    const params = {
+      rawBody: ruleBody,
+      signature: signWebhook(ruleBody, ["a-secret", SECRET], NOW),
+      secret: SECRET,
+      now: NOW,
+      replayGuard,
+    };
+    await expect(verifyWebhook(params)).resolves.toBeDefined();
+    await expect(verifyWebhook(params)).rejects.toThrow(/already processed/);
+  });
+
+  it("verifies a portal ping and isPingEvent recognises it", async () => {
+    const body = JSON.stringify({ type: "ping", app_id: "app1", endpoint_id: "we1" });
+    const event = await verifyWebhook({
+      rawBody: body,
+      signature: signWebhook(body, SECRET, NOW),
+      secret: SECRET,
+      now: NOW,
+      replayGuard: new InMemoryReplayGuard(),
+    });
+    expect(isPingEvent(event)).toBe(true);
+    expect(isRuleEvent(event)).toBe(false);
+    expect(isConnectionEvent(event)).toBe(false);
+    if (isPingEvent(event)) expect(event.endpoint_id).toBe("we1");
+  });
+
+  it("classifies an app-endpoint connection event without subscription_id", async () => {
+    const body = JSON.stringify({
+      event_id: "e9",
+      grant_id: "g1",
+      app_id: "app1",
+      endpoint_id: "we1",
+      type: "places.changed",
+      occurred_at: "2026-09-12T11:59:55.000Z",
+      places_version: 7,
+    });
+    const event = await verifyWebhook({
+      rawBody: body,
+      signature: signWebhook(body, SECRET, NOW),
+      secret: SECRET,
+      now: NOW,
+    });
+    expect(isConnectionEvent(event)).toBe(true);
+    expect(isPlacesChangedEvent(event)).toBe(true);
+    expect(isPingEvent(event)).toBe(false);
+    expect(event).toMatchObject({ app_id: "app1", endpoint_id: "we1" });
+  });
+
   it("rejects a valid signature over a body that is not an event", async () => {
     const body = JSON.stringify({ hello: "world" });
     await expect(
@@ -132,5 +236,181 @@ describe("verifyWebhook", () => {
         now: NOW,
       }),
     ).rejects.toThrow(/not a ContextKit event/);
+  });
+
+  it.each([
+    ["an array", [{ type: "ping", app_id: "app1", endpoint_id: "we1" }]],
+    ["a ping without endpoint ids", { type: "ping" }],
+    [
+      "an event with an unparseable occurred_at",
+      { event_id: "e1", type: "x", occurred_at: "soon" },
+    ],
+    [
+      "a known connection type missing its fields",
+      { event_id: "e1", type: "places.changed", occurred_at: "2026-09-12T11:59:50.000Z" },
+    ],
+    [
+      "a known rule type missing its target",
+      {
+        event_id: "e1",
+        rule_id: "r1",
+        grant_id: "g1",
+        type: "zone.enter",
+        occurred_at: "2026-09-12T11:59:50.000Z",
+      },
+    ],
+  ])("rejects %s", async (_label, payload) => {
+    const body = JSON.stringify(payload);
+    await expect(
+      verifyWebhook({
+        rawBody: body,
+        signature: signWebhook(body, SECRET, NOW),
+        secret: SECRET,
+        now: NOW,
+      }),
+    ).rejects.toThrow(/not a ContextKit event/);
+  });
+
+  it("gives the replay guard a ping's signed time when it has no occurred_at", async () => {
+    const body = JSON.stringify({
+      type: "ping",
+      app_id: "app1",
+      endpoint_id: "we1",
+      event_id: "p1",
+    });
+    const seen = jest.fn().mockReturnValue(false);
+    await verifyWebhook({
+      rawBody: body,
+      signature: signWebhook(body, SECRET, NOW),
+      secret: SECRET,
+      now: NOW + 5_000,
+      replayGuard: { seen },
+    });
+    expect(seen).toHaveBeenCalledWith("p1", Math.floor(NOW / 1000) * 1000);
+  });
+
+  it("refuses a header stuffed with more v1 signatures than a rotation produces", async () => {
+    const header = `${signWebhook(ruleBody, SECRET, NOW)}${`,v1=${"0".repeat(64)}`.repeat(MAX_SIGNATURES)}`;
+    await expect(
+      verifyWebhook({ rawBody: ruleBody, signature: header, secret: SECRET, now: NOW }),
+    ).rejects.toThrow(/malformed signature header/);
+  });
+
+  it("type guards check each shape's required fields, not just type", () => {
+    const base = { event_id: "e1", occurred_at: "2026-09-12T11:59:50.000Z", grant_id: "g1" };
+    const as = (v: object): WebhookEvent => v as WebhookEvent;
+    expect(isRuleEvent(as({ ...base, rule_id: "r1", type: "zone.enter" }))).toBe(false);
+    expect(
+      isRuleEvent(as({ ...base, rule_id: "r1", type: "zone.teleport", target: { label: "x" } })),
+    ).toBe(false);
+    expect(
+      isRuleEvent(as({ ...base, rule_id: "r1", type: "zone.enter", target: { label: "x" } })),
+    ).toBe(true);
+    expect(isPingEvent(as({ type: "ping" }))).toBe(false);
+    expect(isPlacesChangedEvent(as({ ...base, type: "places.changed" }))).toBe(false);
+    expect(isConnectionEvent(as({ ...base, type: "places.changed" }))).toBe(false);
+    expect(
+      isSensitiveExpiringEvent(
+        as({
+          ...base,
+          type: "sensitive.expiring",
+          sensitive_expires_at: "t",
+          days_left: 3,
+          scopes: [],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isSensitiveLapsedEvent(
+        as({ ...base, type: "sensitive.lapsed", sensitive_expires_at: "t", scopes: [] }),
+      ),
+    ).toBe(false);
+    expect(isSensitiveRemovedEvent(as({ ...base, type: "sensitive.removed", scopes: [1] }))).toBe(
+      false,
+    );
+    expect(
+      isSensitiveRemovedEvent(
+        as({ ...base, type: "sensitive.removed", scopes: ["location.lookup"] }),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["too short", "abc"],
+    ["not hex", "z".repeat(64)],
+    ["oversized", "a".repeat(10_000)],
+  ])("refuses a %s v1 signature as malformed", async (_label, sig) => {
+    const header = `${signWebhook(ruleBody, SECRET, NOW)},v1=${sig}`;
+    await expect(
+      verifyWebhook({ rawBody: ruleBody, signature: header, secret: SECRET, now: NOW }),
+    ).rejects.toThrow(/malformed signature header/);
+  });
+
+  it("signWebhook refuses more secrets than verifyWebhook accepts", () => {
+    const secrets = Array.from({ length: MAX_SIGNATURES + 1 }, (_, i) => `s${i}`);
+    expect(() => signWebhook("{}", secrets, NOW)).toThrow(/at most/);
+  });
+
+  it("still accepts an event type newer than this SDK, on its common fields", async () => {
+    const body = JSON.stringify({
+      event_id: "e7",
+      type: "visits.summarised",
+      occurred_at: "2026-09-12T11:59:55.000Z",
+    });
+    const event = await verifyWebhook({
+      rawBody: body,
+      signature: signWebhook(body, SECRET, NOW),
+      secret: SECRET,
+      now: NOW,
+    });
+    expect(event.type).toBe("visits.summarised");
+    expect(isKnownEvent(event)).toBe(false);
+    expect(isRuleEvent(event) || isConnectionEvent(event) || isPingEvent(event)).toBe(false);
+  });
+
+  it.each(["123.4", "1e9", "-5", "+5", ""])("refuses a non-integer timestamp t=%s", (t) => {
+    expect(parseSignatureHeader(`t=${t},v1=${"a".repeat(64)}`)).toBeNull();
+  });
+
+  it.each([null, undefined, "ping", 42, [], [{ type: "ping" }]])(
+    "every guard returns false, never throws, for %p",
+    (value) => {
+      const v = value as unknown as WebhookEvent;
+      for (const guard of [
+        isKnownEvent,
+        isPingEvent,
+        isRuleEvent,
+        isConnectionEvent,
+        isPlacesChangedEvent,
+        isSensitiveExpiringEvent,
+        isSensitiveLapsedEvent,
+        isSensitiveRemovedEvent,
+      ]) {
+        expect(guard(v)).toBe(false);
+      }
+    },
+  );
+
+  it("refuses a header with more than one timestamp", () => {
+    const sig = "a".repeat(64);
+    expect(parseSignatureHeader(`t=1800000000,t=1800000001,v1=${sig}`)).toBeNull();
+    expect(parseSignatureHeader(`t=1800000000,v1=${sig}`)).toEqual({
+      timestamp: 1800000000,
+      signatures: [sig],
+    });
+  });
+
+  it("accepts an upper-case hex signature", async () => {
+    const header = signWebhook(ruleBody, SECRET, NOW).replace(
+      /v1=([0-9a-f]+)/,
+      (_m, hex: string) => `v1=${hex.toUpperCase()}`,
+    );
+    await expect(
+      verifyWebhook({ rawBody: ruleBody, signature: header, secret: SECRET, now: NOW }),
+    ).resolves.toBeDefined();
+  });
+
+  it("signWebhook refuses an empty secret list", () => {
+    expect(() => signWebhook("{}", [], NOW)).toThrow(/at least one secret/);
   });
 });

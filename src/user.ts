@@ -1,6 +1,7 @@
-import { TokenRevokedError } from "./errors.js";
+import { TokenRevokedError, isMissingScope } from "./errors.js";
 import { type HttpOptions, type HttpRequest, UnauthorizedSignal, request } from "./http.js";
 import {
+  type AppScope,
   type CreatedRule,
   type CreatedSubscription,
   type CurrentPlaceAnswer,
@@ -12,6 +13,9 @@ import {
   MAX_ZONE_RADIUS_M,
   MIN_MAX_AGE_S,
   MIN_ZONE_RADIUS_M,
+  type Me,
+  type MeResponse,
+  PURPOSE_KEY_PATTERN,
   type PlaceLookup,
   type PointAt,
   type PointsPage,
@@ -23,6 +27,7 @@ import {
   type TokenSet,
   type VisitsPage,
   type ZoneAnswer,
+  isAppScope,
 } from "./types.js";
 
 /** The minimum a caller must hold per user. A full TokenSet is accepted. */
@@ -31,6 +36,9 @@ export interface UserTokens {
   accessToken?: string;
   /** Epoch ms. Without it the first call refreshes. */
   accessTokenExpiresAt?: number;
+  /** The effective scopes, as a TokenSet carries them. Used to pick the
+   *  endpoint `rules.list()` may call; refreshed with every token set. */
+  scopes?: readonly AppScope[];
 }
 
 export interface UserClientOptions {
@@ -56,6 +64,19 @@ export interface VerifyZoneParams {
   maxAgeS?: number;
 }
 
+export interface DaysParams extends PurposeParams {
+  from: string;
+  to: string;
+  /** IANA timezone the days are counted in. */
+  tz: string;
+}
+
+export interface PointAtParams extends PurposeParams {
+  at: string;
+  toleranceS?: number;
+  source?: LocationSource;
+}
+
 export interface VisitsListParams {
   from?: string;
   to?: string;
@@ -64,7 +85,17 @@ export interface VisitsListParams {
   cursor?: string;
 }
 
-export interface RangeParams {
+/**
+ * Every read of raw coordinates names the purpose it is for: the key of a
+ * purpose registered (and, in production, approved) in the developer portal.
+ * The user sees that purpose on consent, in their access log and on renewal.
+ */
+export interface PurposeParams {
+  /** A registered purpose key, `^[a-z][a-z0-9_]{2,39}$`. */
+  purpose: string;
+}
+
+export interface RangeParams extends PurposeParams {
   /** At most 31 days apart; page by month for longer histories. */
   from: string;
   to: string;
@@ -94,8 +125,13 @@ interface BaseRuleParams {
    */
   activeFrom?: string | Date;
   activeUntil?: string | Date;
-  /** https only. */
-  webhookUrl: string;
+  /**
+   * Omit it to deliver to your app's webhook endpoints subscribed to
+   * `rule.fired` (register them in the developer portal) — the usual choice.
+   * If given, it must exactly equal one of those registered endpoint URLs,
+   * or the API answers 400 `webhook_url_not_registered`.
+   */
+  webhookUrl?: string;
 }
 
 export interface CreatePlaceRuleParams extends BaseRuleParams {
@@ -158,6 +194,16 @@ export class UserClient {
     this.disconnected = true;
   }
 
+  /**
+   * Who this connection is: the pairwise `sub`, your `externalUserId`, the
+   * scopes usable now versus held, and the two-tier expiry timestamps.
+   * Any live token may call it, whatever its scopes.
+   */
+  async me(): Promise<Me> {
+    const raw = await this.call<MeResponse>({ method: "GET", url: "/v1/me" });
+    return toMe(raw);
+  }
+
   readonly answers = {
     /** Is the user inside this circle right now? "unknown" is a value. */
     verifyZone: async (params: VerifyZoneParams): Promise<ZoneAnswer> => {
@@ -216,13 +262,18 @@ export class UserClient {
       }),
   };
 
-  /** Sensitive tier: raw coordinates. Needs the location.*.read / lookup scopes. */
+  /**
+   * Sensitive tier: raw coordinates. Needs the location.*.read / lookup
+   * scopes, and every call names a registered `purpose`. When the sensitive
+   * tier has lapsed these raise ScopeExpiredError; renew through consent.
+   */
   readonly locations = {
-    range: (params: RangeParams): Promise<PointsPage> =>
+    range: async (params: RangeParams): Promise<PointsPage> =>
       this.call<PointsPage>({
         method: "GET",
         url: "/v1/locations/timerange",
         query: {
+          purpose: assertPurpose(params),
           from: params.from,
           to: params.to,
           device_id: params.deviceId,
@@ -234,28 +285,42 @@ export class UserClient {
       }),
 
     /** Which calendar days (in `tz`) have any points. */
-    days: (params: { from: string; to: string; tz: string }): Promise<DaysWithData> =>
+    days: async (params: DaysParams): Promise<DaysWithData> =>
       this.call<DaysWithData>({
         method: "GET",
         url: "/v1/locations/days",
-        query: { from: params.from, to: params.to, tz: params.tz },
+        query: {
+          purpose: assertPurpose(params),
+          from: params.from,
+          to: params.to,
+          tz: params.tz,
+        },
       }),
 
-    latest: (): Promise<LatestPoint> =>
-      this.call<LatestPoint>({ method: "GET", url: "/v1/locations/latest" }),
+    latest: async (params: PurposeParams): Promise<LatestPoint> =>
+      this.call<LatestPoint>({
+        method: "GET",
+        url: "/v1/locations/latest",
+        query: { purpose: assertPurpose(params) },
+      }),
 
     /** The point nearest `at`, within `toleranceS`. 404 if none. */
-    at: (params: { at: string; toleranceS?: number; source?: LocationSource }): Promise<PointAt> =>
+    at: async (params: PointAtParams): Promise<PointAt> =>
       this.call<PointAt>({
         method: "GET",
         url: "/v1/locations/lookup",
-        query: { at: params.at, tolerance_s: params.toleranceS, source: params.source },
+        query: {
+          purpose: assertPurpose(params),
+          at: params.at,
+          tolerance_s: params.toleranceS,
+          source: params.source,
+        },
       }),
   };
 
   readonly rules = {
     /** Fire a webhook when the user enters / exits / dwells at a shared place.
-     *  The returned `secret` is shown once; keep it to verify deliveries. */
+     *  Deliveries are signed with your app webhook endpoint's secret. */
     createPlace: (params: CreatePlaceRuleParams): Promise<CreatedRule> =>
       this.call<CreatedRule>({
         method: "POST",
@@ -278,9 +343,36 @@ export class UserClient {
       });
     },
 
-    /** Every rule this app holds for the user, place and zone alike. */
-    list: (): Promise<RuleSummary[]> =>
-      this.call<RuleSummary[]>({ method: "GET", url: "/v1/rules/place" }),
+    /**
+     * Every rule this app holds for the user, place and zone alike. Both list
+     * endpoints return the same set but each demands its own scope, so this
+     * asks the one the grant holds: zone when it holds only
+     * location.rules.zone, place otherwise.
+     */
+    list: async (): Promise<RuleSummary[]> => {
+      // Ensure a token set (and so the scopes) before choosing. A handle
+      // ended by disconnect() must not refresh; call() refuses it below.
+      if (!this.disconnected) await this.accessToken();
+      const scopes = this.tokens.scopes;
+      if (scopes) {
+        const zoneOnly =
+          scopes.includes("location.rules.zone") && !scopes.includes("location.rules.place");
+        return this.call<RuleSummary[]>({
+          method: "GET",
+          url: zoneOnly ? "/v1/rules/zone" : "/v1/rules/place",
+        });
+      }
+      // Scopes unknown (tokens persisted without them): try place, and fall
+      // back to zone only when the grant plainly lacks the place scope.
+      try {
+        return await this.call<RuleSummary[]>({ method: "GET", url: "/v1/rules/place" });
+      } catch (err) {
+        // Only a genuinely missing place scope falls back; any other 403 is a
+        // real authorization problem the caller must see.
+        if (!isMissingScope(err)) throw err;
+        return this.call<RuleSummary[]>({ method: "GET", url: "/v1/rules/zone" });
+      }
+    },
 
     deletePlace: (ruleId: string): Promise<void> =>
       this.call<void>({ method: "DELETE", url: `/v1/rules/place/${encodeURIComponent(ruleId)}` }),
@@ -289,9 +381,15 @@ export class UserClient {
       this.call<void>({ method: "DELETE", url: `/v1/rules/zone/${encodeURIComponent(ruleId)}` }),
   };
 
+  /**
+   * @deprecated Connection events (`places.changed`, `sensitive.*`) are now
+   * delivered for every connection to your app's webhook endpoints, registered
+   * once in the developer portal. These routes keep working this release.
+   */
   readonly subscriptions = {
-    /** One subscription per grant; registering again replaces it and mints a
-     *  new secret. */
+    /** @deprecated Register an app webhook endpoint in the developer portal
+     *  instead. One subscription per grant; registering again replaces it and
+     *  mints a new secret. */
     register: (params: {
       events: readonly ConnectionEventName[];
       webhookUrl: string;
@@ -302,9 +400,11 @@ export class UserClient {
         body: { events: [...params.events], webhook_url: params.webhookUrl },
       }),
 
+    /** @deprecated See `subscriptions`. */
     get: (): Promise<SubscriptionSummary | null> =>
       this.call<SubscriptionSummary | null>({ method: "GET", url: "/v1/subscriptions" }),
 
+    /** @deprecated See `subscriptions`. */
     remove: (subscriptionId: string): Promise<void> =>
       this.call<void>({
         method: "DELETE",
@@ -364,6 +464,7 @@ export class UserClient {
             refreshToken: next.refreshToken,
             accessToken: next.accessToken,
             accessTokenExpiresAt: next.accessTokenExpiresAt,
+            scopes: next.scopes,
           };
           if (this.options.onTokens) await this.options.onTokens(next);
           return next;
@@ -376,10 +477,43 @@ export class UserClient {
   }
 }
 
+/** Refuses a missing or malformed purpose before any request: the API would
+ *  answer 400 `invalid_purpose`, and the check is cheaper here. */
+function assertPurpose(params: PurposeParams | undefined): string {
+  const purpose = (params as { purpose?: unknown } | undefined)?.purpose;
+  if (typeof purpose !== "string" || purpose.length === 0) {
+    throw new TypeError(
+      "purpose is required: pass the key of a purpose registered for this app in the developer portal",
+    );
+  }
+  if (!PURPOSE_KEY_PATTERN.test(purpose)) {
+    throw new TypeError(
+      `purpose "${purpose}" is not a purpose key (lowercase letter, then 2–39 of a-z, 0-9, _)`,
+    );
+  }
+  return purpose;
+}
+
+function toMe(raw: MeResponse): Me {
+  const scopes = (raw.scopes ?? []).filter(isAppScope);
+  return {
+    sub: raw.sub,
+    externalUserId: raw.external_user_id ?? null,
+    scopes,
+    heldScopes: raw.held_scopes ? raw.held_scopes.filter(isAppScope) : scopes,
+    placesVersion: raw.places_version ?? null,
+    expiresAt: raw.expires_at ?? raw.grant_expires_at ?? null,
+    sensitiveExpiresAt: raw.sensitive_expires_at ?? null,
+    sensitiveLapsedAt: raw.sensitive_lapsed_at ?? null,
+    renewalGraceEndsAt: raw.renewal_grace_ends_at ?? null,
+    connectedAt: raw.connected_at ?? null,
+  };
+}
+
 function ruleBody(params: BaseRuleParams): Record<string, unknown> {
   return {
     type: params.type,
-    webhook_url: params.webhookUrl,
+    ...(params.webhookUrl !== undefined ? { webhook_url: params.webhookUrl } : {}),
     ...(params.dwellMinutes !== undefined ? { dwell_minutes: params.dwellMinutes } : {}),
     ...(params.maxEventAgeS !== undefined ? { max_event_age_s: params.maxEventAgeS } : {}),
     ...(params.activeFrom !== undefined

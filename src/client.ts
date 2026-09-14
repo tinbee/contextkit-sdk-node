@@ -185,7 +185,14 @@ export function toTokenSet(raw: TokenResponse, now = Date.now()): TokenSet {
     refreshTokenExpiresAt: raw.refresh_token_expires_at ?? null,
     scopes: raw.scope.split(" ").filter(isAppScope),
     sub: raw.sub ?? null,
+    sensitiveScopesExpiresAt: epochMs(raw.sensitive_scopes_expire_at),
   };
+}
+
+function epochMs(iso: string | null | undefined): number | null {
+  if (typeof iso !== "string") return null;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : ms;
 }
 
 function stripSlash(url: string): string {

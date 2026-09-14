@@ -11,6 +11,9 @@ export {
   UserClient,
   type CreatePlaceRuleParams,
   type CreateZoneRuleParams,
+  type DaysParams,
+  type PointAtParams,
+  type PurposeParams,
   type RangeParams,
   type UserClientBackend,
   type UserClientOptions,
@@ -21,6 +24,7 @@ export {
 export { codeChallenge, generateCodeVerifier, generateState } from "./pkce.js";
 export {
   InMemoryReplayGuard,
+  MAX_SIGNATURES,
   MAX_TOLERANCE_S,
   RECOMMENDED_TOLERANCE_S,
   SIGNATURE_HEADER,

@@ -23,12 +23,28 @@ export class ContextKitError extends Error {
   }
 }
 
-/** 400 — the request shape was wrong. `messages` is what the API said. */
+/**
+ * 400 — the request shape was wrong. `messages` is what the API said.
+ * `error` is the API's machine code when it sent one (`"invalid_purpose"`
+ * for a purpose that is missing, unknown, or not usable for this scope), and
+ * `detail` its explanation.
+ */
 export class ValidationError extends ContextKitError {
   readonly messages: string[];
+  readonly error: string | null;
+  readonly detail: string | null;
   constructor(messages: string[], body: unknown) {
-    super(messages.join("; ") || "validation failed", "validation", 400, body);
+    // Only a machine code counts: Nest's generic reason phrase ("Bad Request")
+    // is not one, so it reads as null rather than being mistaken for a code.
+    const rawError = stringField(body, "error");
+    const error = rawError && /^[a-z][a-z0-9_]*$/.test(rawError) ? rawError : null;
+    const detail = stringField(body, "detail");
+    // `messages` stays exactly what the API's `message` said; `detail` only
+    // fills in the human-readable Error message when there is nothing else.
+    super(messages.join("; ") || detail || "validation failed", "validation", 400, body);
     this.messages = messages;
+    this.error = error;
+    this.detail = detail;
   }
 }
 
@@ -41,10 +57,41 @@ export class TokenRevokedError extends ContextKitError {
   }
 }
 
-/** 403 — the grant does not carry the scope this call needs. */
+/** 403 other than `scope_expired` — usually the grant does not carry the
+ *  scope this call needs (`error: "missing_scope"`; request it at consent).
+ *  Older APIs send a generic Forbidden body here too, so check
+ *  `isMissingScope(err)` before treating it as a missing scope. */
 export class ScopeError extends ContextKitError {
+  constructor(message: string, body: unknown, code = "scope") {
+    super(message, code, 403, body);
+  }
+}
+
+/** True when a 403 says the grant lacks a scope — the `missing_scope` code, or
+ *  the API's "grant is missing scope …" message from before the code existed. */
+export function isMissingScope(err: unknown): boolean {
+  if (!(err instanceof ScopeError) || err instanceof ScopeExpiredError) return false;
+  const code = stringField(err.body, "error");
+  return code === "missing_scope" || /missing scope/i.test(err.message);
+}
+
+/**
+ * 403 `scope_expired` — the grant HAD this sensitive scope, but its tier
+ * lapsed. The rest of the connection keeps working. Tell the user access to
+ * their raw location has ended and offer renewal by sending them through
+ * consent again; until `renewalGraceEndsAt` that is a single tap.
+ */
+export class ScopeExpiredError extends ScopeError {
+  /** ISO 8601; when the sensitive tier ended. */
+  readonly sensitiveExpiredAt: string | null;
+  /** ISO 8601; after this the scopes are removed and renewal is a full
+   *  re-consent. */
+  readonly renewalGraceEndsAt: string | null;
   constructor(message: string, body: unknown) {
-    super(message, "scope", 403, body);
+    super(message, body, "scope_expired");
+    this.sensitiveExpiredAt =
+      stringField(body, "sensitive_expired_at") ?? stringField(body, "sensitive_expires_at");
+    this.renewalGraceEndsAt = stringField(body, "renewal_grace_ends_at");
   }
 }
 
@@ -90,6 +137,12 @@ export class WebhookVerificationError extends ContextKitError {
   constructor(detail: string) {
     super(detail, "webhook_verification");
   }
+}
+
+function stringField(body: unknown, key: string): string | null {
+  if (!body || typeof body !== "object") return null;
+  const value = (body as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : null;
 }
 
 function describe(err: unknown): string {

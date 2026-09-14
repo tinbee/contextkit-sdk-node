@@ -206,12 +206,17 @@ describe("UserClient locations", () => {
     const { ck, fetch } = make(() => ({ body: { points: [] } }));
     const user = ck.forUser(fresh);
     await user.locations.range({
+      purpose: "trip_timeline",
       from: "2026-09-01T00:00:00Z",
       to: "2026-09-02T00:00:00Z",
       minIntervalS: 0,
     });
     expect(fetch.calls[0]?.url).toContain("min_interval_s=0");
-    await user.locations.range({ from: "2026-09-01T00:00:00Z", to: "2026-09-02T00:00:00Z" });
+    await user.locations.range({
+      purpose: "trip_timeline",
+      from: "2026-09-01T00:00:00Z",
+      to: "2026-09-02T00:00:00Z",
+    });
     expect(fetch.calls[1]?.url).not.toContain("min_interval_s");
   });
 });
@@ -324,6 +329,29 @@ describe("UserClient rules + subscriptions", () => {
       }),
     ).rejects.toThrow(/activeUntil: invalid Date/);
     expect(fetch.calls).toHaveLength(0);
+  });
+
+  it("omits webhook_url when webhookUrl is not given (app endpoints deliver)", async () => {
+    const { ck, fetch } = make(() => ({ body: { id: "r3", webhook_url: null } }));
+    const user = ck.forUser(fresh);
+    const zone = await user.rules.createZone({
+      type: "enter",
+      lat: 1,
+      lon: 2,
+      radiusM: 300,
+      label: "Hotel",
+    });
+    await user.rules.createPlace({ type: "exit", placeId: "p1" });
+    expect(zone.secret).toBeUndefined();
+    expect(fetch.calls[0]?.body).toEqual({
+      lat: 1,
+      lon: 2,
+      radius_m: 300,
+      label: "Hotel",
+      type: "enter",
+    });
+    expect(fetch.calls[1]?.body).toEqual({ place_id: "p1", type: "exit" });
+    for (const call of fetch.calls) expect(call.body).not.toHaveProperty("webhook_url");
   });
 
   it("register posts events + webhook_url", async () => {

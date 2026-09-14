@@ -1,10 +1,19 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { WebhookVerificationError } from "./errors.js";
-import type { WebhookEvent } from "./types.js";
+import {
+  CONNECTION_EVENTS,
+  RULE_EVENT_TYPES,
+  type WebhookEvent,
+  isConnectionEvent,
+  isPingEvent,
+  isRuleEvent,
+} from "./types.js";
 
 /**
  * ContextKit signs every delivery Stripe-style:
- *   X-ContextKit-Signature: t=<unix seconds>,v1=<hex hmac-sha256(secret, `${t}.${body}`)>
+ *   X-ContextKit-Signature: t=<unix seconds>,v1=<hex hmac-sha256(secret, `${t}.${body}`)>[,v1=...]
+ * While an app webhook endpoint's secret is being rotated, the header carries
+ * one v1 per unexpired secret, so a receiver holding either secret verifies.
  * Retries are re-signed, so a receiver never needs a window wider than
  * realistic clock skew. This must agree byte-for-byte with the API's
  * webhook-delivery.service.ts and the Explorer relay's signature.ts.
@@ -12,6 +21,10 @@ import type { WebhookEvent } from "./types.js";
 export const RECOMMENDED_TOLERANCE_S = 60;
 export const MAX_TOLERANCE_S = 300;
 export const SIGNATURE_HEADER = "x-contextkit-signature";
+/** A rotation overlap yields two v1 entries; anything far beyond that is a
+ *  stuffed header, refused before any HMAC comparison runs. */
+export const MAX_SIGNATURES = 8;
+const V1_SIGNATURE = /^[0-9a-fA-F]{64}$/;
 
 /** Something that remembers event ids it has already accepted. Needed for
  *  replay protection across your own retries or a duplicated delivery. */
@@ -25,7 +38,11 @@ export interface VerifyWebhookParams {
   rawBody: Buffer | string;
   /** The X-ContextKit-Signature header value. */
   signature: string | string[] | undefined;
-  /** The secret returned when the rule or subscription was created. */
+  /**
+   * Your app webhook endpoint's secret, shown once when you register (or
+   * rotate) the endpoint in the developer portal. For a legacy rule or
+   * subscription, the secret returned when it was created.
+   */
   secret: string;
   /** Seconds of clock skew to allow. Default 60, max 300. */
   toleranceS?: number;
@@ -39,7 +56,9 @@ export interface VerifyWebhookParams {
  * WebhookVerificationError on any failure — respond 400 and do NOT act.
  */
 export async function verifyWebhook(params: VerifyWebhookParams): Promise<WebhookEvent> {
-  const header = Array.isArray(params.signature) ? params.signature[0] : params.signature;
+  // A framework may split one header across array entries; join them so every
+  // v1 (rotation) is seen. A repeated t= then still fails as ambiguous.
+  const header = Array.isArray(params.signature) ? params.signature.join(",") : params.signature;
   if (!header) throw new WebhookVerificationError(`missing ${SIGNATURE_HEADER} header`);
   const parsed = parseSignatureHeader(header);
   if (!parsed) throw new WebhookVerificationError("malformed signature header");
@@ -55,13 +74,23 @@ export async function verifyWebhook(params: VerifyWebhookParams): Promise<Webhoo
     ? params.rawBody
     : Buffer.from(params.rawBody, "utf8");
   const expected = signPayload(body, parsed.timestamp, params.secret);
-  if (!parsed.signatures.some((candidate) => constantTimeEquals(candidate, expected))) {
+  // During a secret rotation the header carries one v1 per unexpired secret
+  // (old and new, for 24 h). Any match passes. Every candidate is compared,
+  // in constant time, so timing does not reveal which one matched.
+  let matched = false;
+  for (const candidate of parsed.signatures) {
+    if (constantTimeEquals(candidate, expected)) matched = true;
+  }
+  if (!matched) {
     throw new WebhookVerificationError("no v1 signature matched — wrong secret or tampered body");
   }
 
   const event = parseEvent(body);
-  if (params.replayGuard) {
-    const occurredAtMs = Date.parse(event.occurred_at);
+  if (params.replayGuard && event.event_id !== undefined) {
+    // parseEvent guarantees a parseable occurred_at on real events. A ping may
+    // omit it; its signed timestamp is the next most stable time it has.
+    const occurredAtMs =
+      event.occurred_at !== undefined ? Date.parse(event.occurred_at) : parsed.timestamp * 1000;
     if (await params.replayGuard.seen(event.event_id, occurredAtMs)) {
       throw new WebhookVerificationError(`event ${event.event_id} already processed`);
     }
@@ -69,11 +98,23 @@ export async function verifyWebhook(params: VerifyWebhookParams): Promise<Webhoo
   return event;
 }
 
-/** Build the header for a body — for tests and for simulating deliveries. */
-export function signWebhook(body: Buffer | string, secret: string, atMs = Date.now()): string {
+/** Build the header for a body — for tests and for simulating deliveries.
+ *  Pass several secrets to simulate a rotation: one v1 per secret. */
+export function signWebhook(
+  body: Buffer | string,
+  secret: string | readonly string[],
+  atMs = Date.now(),
+): string {
   const t = Math.floor(atMs / 1000);
   const buf = Buffer.isBuffer(body) ? body : Buffer.from(body, "utf8");
-  return `t=${t},v1=${signPayload(buf, t, secret)}`;
+  const secrets = typeof secret === "string" ? [secret] : secret;
+  if (secrets.length === 0) throw new Error("signWebhook needs at least one secret");
+  if (secrets.length > MAX_SIGNATURES) {
+    throw new Error(
+      `signWebhook takes at most ${MAX_SIGNATURES} secrets; verifyWebhook refuses more`,
+    );
+  }
+  return [`t=${t}`, ...secrets.map((s) => `v1=${signPayload(buf, t, s)}`)].join(",");
 }
 
 export function parseSignatureHeader(
@@ -87,10 +128,16 @@ export function parseSignatureHeader(
     const key = part.slice(0, eq).trim();
     const value = part.slice(eq + 1).trim();
     if (key === "t") {
-      const n = Number(value);
-      if (!Number.isFinite(n)) return null;
-      timestamp = n;
+      // Whole unix seconds only: no fractions, exponents or signs.
+      if (!/^\d{1,12}$/.test(value)) return null;
+      // Exactly one timestamp: a second t= makes the signed time ambiguous.
+      if (timestamp !== null) return null;
+      timestamp = Number(value);
     } else if (key === "v1") {
+      // Always a hex SHA-256 HMAC; anything else is refused before any hashing.
+      if (!V1_SIGNATURE.test(value)) return null;
+      // Stop at the cap instead of collecting a stuffed header to the end.
+      if (signatures.length === MAX_SIGNATURES) return null;
       signatures.push(value.toLowerCase());
     }
     // Unknown keys are ignored so a future v2 does not break v1 receivers.
@@ -129,21 +176,46 @@ function parseEvent(body: Buffer): WebhookEvent {
   } catch {
     throw new WebhookVerificationError("body is not JSON");
   }
-  if (
-    !data ||
-    typeof data !== "object" ||
-    typeof (data as { event_id?: unknown }).event_id !== "string" ||
-    typeof (data as { occurred_at?: unknown }).occurred_at !== "string" ||
-    typeof (data as { type?: unknown }).type !== "string"
-  ) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new WebhookVerificationError("body is not a ContextKit event");
   }
-  return data as WebhookEvent;
+  const obj = data as Record<string, unknown>;
+  const occurredAt = obj.occurred_at;
+  if (occurredAt !== undefined && !(typeof occurredAt === "string" && isDate(occurredAt))) {
+    throw new WebhookVerificationError("body is not a ContextKit event");
+  }
+  const event = data as WebhookEvent;
+  const type = obj.type;
+  let valid: boolean;
+  if (type === "ping") {
+    // A portal "Send test" ping carries its endpoint ids; the rest is optional.
+    valid = isPingEvent(event) && (obj.event_id === undefined || typeof obj.event_id === "string");
+  } else if ((RULE_EVENT_TYPES as readonly unknown[]).includes(type)) {
+    valid = isRuleEvent(event);
+  } else if ((CONNECTION_EVENTS as readonly unknown[]).includes(type)) {
+    valid = isConnectionEvent(event);
+  } else {
+    // A type newer than this SDK: accepted on the common fields so a receiver
+    // can acknowledge and ignore it, rather than failing until the endpoint is
+    // disabled. Every type this SDK knows was checked against its full shape
+    // above, so narrowing on a known `type` is safe.
+    valid =
+      typeof type === "string" &&
+      typeof obj.event_id === "string" &&
+      typeof occurredAt === "string";
+  }
+  if (!valid) throw new WebhookVerificationError("body is not a ContextKit event");
+  return event;
+}
+
+function isDate(value: string): boolean {
+  return Number.isFinite(Date.parse(value));
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
-  const left = Buffer.from(a, "utf8");
-  const right = Buffer.from(b, "utf8");
-  if (left.length !== right.length) return false;
-  return timingSafeEqual(left, right);
+  // Both sides are 64-hex SHA-256 HMACs (parseSignatureHeader refuses anything
+  // else), so their 32 decoded bytes compare directly in constant time.
+  const left = Buffer.from(a, "hex");
+  const right = Buffer.from(b, "hex");
+  return left.length === 32 && right.length === 32 && timingSafeEqual(left, right);
 }
