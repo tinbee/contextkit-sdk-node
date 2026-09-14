@@ -125,13 +125,13 @@ export function parseSignatureHeader(
     } else if (key === "v1") {
       // Always a hex SHA-256 HMAC; anything else is refused before any hashing.
       if (!V1_SIGNATURE.test(value)) return null;
+      // Stop at the cap instead of collecting a stuffed header to the end.
+      if (signatures.length === MAX_SIGNATURES) return null;
       signatures.push(value.toLowerCase());
     }
     // Unknown keys are ignored so a future v2 does not break v1 receivers.
   }
-  if (timestamp === null || signatures.length === 0 || signatures.length > MAX_SIGNATURES) {
-    return null;
-  }
+  if (timestamp === null || signatures.length === 0) return null;
   return { timestamp, signatures };
 }
 
