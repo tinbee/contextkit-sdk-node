@@ -1,6 +1,6 @@
 import { WebhookVerificationError } from "../errors.js";
 import { isConnectionEvent, isPingEvent, isPlacesChangedEvent, isRuleEvent } from "../types.js";
-import { InMemoryReplayGuard, signWebhook, verifyWebhook } from "../webhooks.js";
+import { InMemoryReplayGuard, MAX_SIGNATURES, signWebhook, verifyWebhook } from "../webhooks.js";
 
 const SECRET = "0123456789abcdef0123456789abcdef";
 const NOW = Date.parse("2026-09-12T12:00:00.000Z");
@@ -238,6 +238,13 @@ describe("verifyWebhook", () => {
       replayGuard: { seen },
     });
     expect(seen).toHaveBeenCalledWith("p1", Math.floor(NOW / 1000) * 1000);
+  });
+
+  it("refuses a header stuffed with more v1 signatures than a rotation produces", async () => {
+    const header = `${signWebhook(ruleBody, SECRET, NOW)}${",v1=00".repeat(MAX_SIGNATURES)}`;
+    await expect(
+      verifyWebhook({ rawBody: ruleBody, signature: header, secret: SECRET, now: NOW }),
+    ).rejects.toThrow(/malformed signature header/);
   });
 
   it("signWebhook refuses an empty secret list", () => {

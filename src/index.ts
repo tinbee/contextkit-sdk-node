@@ -24,6 +24,7 @@ export {
 export { codeChallenge, generateCodeVerifier, generateState } from "./pkce.js";
 export {
   InMemoryReplayGuard,
+  MAX_SIGNATURES,
   MAX_TOLERANCE_S,
   RECOMMENDED_TOLERANCE_S,
   SIGNATURE_HEADER,

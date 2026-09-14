@@ -14,6 +14,9 @@ import type { WebhookEvent } from "./types.js";
 export const RECOMMENDED_TOLERANCE_S = 60;
 export const MAX_TOLERANCE_S = 300;
 export const SIGNATURE_HEADER = "x-contextkit-signature";
+/** A rotation overlap yields two v1 entries; anything far beyond that is a
+ *  stuffed header, refused before any HMAC comparison runs. */
+export const MAX_SIGNATURES = 8;
 
 /** Something that remembers event ids it has already accepted. Needed for
  *  replay protection across your own retries or a duplicated delivery. */
@@ -118,7 +121,9 @@ export function parseSignatureHeader(
     }
     // Unknown keys are ignored so a future v2 does not break v1 receivers.
   }
-  if (timestamp === null || signatures.length === 0) return null;
+  if (timestamp === null || signatures.length === 0 || signatures.length > MAX_SIGNATURES) {
+    return null;
+  }
   return { timestamp, signatures };
 }
 
