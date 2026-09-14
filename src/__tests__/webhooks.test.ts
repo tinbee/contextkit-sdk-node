@@ -202,4 +202,45 @@ describe("verifyWebhook", () => {
       }),
     ).rejects.toThrow(/not a ContextKit event/);
   });
+
+  it.each([
+    ["an array", [{ type: "ping", app_id: "app1", endpoint_id: "we1" }]],
+    ["a ping without endpoint ids", { type: "ping" }],
+    [
+      "an event with an unparseable occurred_at",
+      { event_id: "e1", type: "x", occurred_at: "soon" },
+    ],
+  ])("rejects %s", async (_label, payload) => {
+    const body = JSON.stringify(payload);
+    await expect(
+      verifyWebhook({
+        rawBody: body,
+        signature: signWebhook(body, SECRET, NOW),
+        secret: SECRET,
+        now: NOW,
+      }),
+    ).rejects.toThrow(/not a ContextKit event/);
+  });
+
+  it("gives the replay guard a ping's signed time when it has no occurred_at", async () => {
+    const body = JSON.stringify({
+      type: "ping",
+      app_id: "app1",
+      endpoint_id: "we1",
+      event_id: "p1",
+    });
+    const seen = jest.fn().mockReturnValue(false);
+    await verifyWebhook({
+      rawBody: body,
+      signature: signWebhook(body, SECRET, NOW),
+      secret: SECRET,
+      now: NOW + 5_000,
+      replayGuard: { seen },
+    });
+    expect(seen).toHaveBeenCalledWith("p1", Math.floor(NOW / 1000) * 1000);
+  });
+
+  it("signWebhook refuses an empty secret list", () => {
+    expect(() => signWebhook("{}", [], NOW)).toThrow(/at least one secret/);
+  });
 });

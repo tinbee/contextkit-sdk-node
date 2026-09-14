@@ -74,7 +74,10 @@ export async function verifyWebhook(params: VerifyWebhookParams): Promise<Webhoo
 
   const event = parseEvent(body);
   if (params.replayGuard && event.event_id !== undefined) {
-    const occurredAtMs = event.occurred_at ? Date.parse(event.occurred_at) : Date.now();
+    // parseEvent guarantees a parseable occurred_at on real events. A ping may
+    // omit it; its signed timestamp is the next most stable time it has.
+    const occurredAtMs =
+      event.occurred_at !== undefined ? Date.parse(event.occurred_at) : parsed.timestamp * 1000;
     if (await params.replayGuard.seen(event.event_id, occurredAtMs)) {
       throw new WebhookVerificationError(`event ${event.event_id} already processed`);
     }
@@ -92,6 +95,7 @@ export function signWebhook(
   const t = Math.floor(atMs / 1000);
   const buf = Buffer.isBuffer(body) ? body : Buffer.from(body, "utf8");
   const secrets = typeof secret === "string" ? [secret] : secret;
+  if (secrets.length === 0) throw new Error("signWebhook needs at least one secret");
   return [`t=${t}`, ...secrets.map((s) => `v1=${signPayload(buf, t, s)}`)].join(",");
 }
 
@@ -148,18 +152,29 @@ function parseEvent(body: Buffer): WebhookEvent {
   } catch {
     throw new WebhookVerificationError("body is not JSON");
   }
-  const obj = data as { event_id?: unknown; occurred_at?: unknown; type?: unknown } | null;
-  // A portal "Send test" ping may carry only its type and endpoint ids.
-  const isPing = !!obj && typeof obj === "object" && obj.type === "ping";
-  if (
-    !obj ||
-    typeof obj !== "object" ||
-    typeof obj.type !== "string" ||
-    (!isPing && (typeof obj.event_id !== "string" || typeof obj.occurred_at !== "string"))
-  ) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new WebhookVerificationError("body is not a ContextKit event");
   }
+  const obj = data as Record<string, unknown>;
+  const occurredAt = obj.occurred_at;
+  if (occurredAt !== undefined && !(typeof occurredAt === "string" && isDate(occurredAt))) {
+    throw new WebhookVerificationError("body is not a ContextKit event");
+  }
+  const valid =
+    obj.type === "ping"
+      ? // A portal "Send test" ping carries its endpoint ids; the rest is optional.
+        typeof obj.app_id === "string" &&
+        typeof obj.endpoint_id === "string" &&
+        (obj.event_id === undefined || typeof obj.event_id === "string")
+      : typeof obj.type === "string" &&
+        typeof obj.event_id === "string" &&
+        typeof occurredAt === "string";
+  if (!valid) throw new WebhookVerificationError("body is not a ContextKit event");
   return data as WebhookEvent;
+}
+
+function isDate(value: string): boolean {
+  return Number.isFinite(Date.parse(value));
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
