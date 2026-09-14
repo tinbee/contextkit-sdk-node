@@ -102,7 +102,8 @@ export function isPurposeKey(value: unknown): value is string {
 /** Raw body of GET /v1/me. */
 export interface MeResponse {
   sub: string;
-  external_user_id: string | null;
+  /** Absent from older APIs. */
+  external_user_id?: string | null;
   /** Effective scopes. */
   scopes: string[];
   /** Every scope on the grant, including a lapsed sensitive tier still in its
@@ -114,7 +115,7 @@ export interface MeResponse {
   sensitive_expires_at?: string | null;
   sensitive_lapsed_at?: string | null;
   renewal_grace_ends_at?: string | null;
-  connected_at: string | null;
+  connected_at?: string | null;
 }
 
 /** Who this connection is, from the app's side. Timestamps are ISO 8601. */

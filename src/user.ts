@@ -1,4 +1,4 @@
-import { ScopeError, ScopeExpiredError, TokenRevokedError } from "./errors.js";
+import { TokenRevokedError, isMissingScope } from "./errors.js";
 import { type HttpOptions, type HttpRequest, UnauthorizedSignal, request } from "./http.js";
 import {
   type AppScope,
@@ -367,7 +367,9 @@ export class UserClient {
       try {
         return await this.call<RuleSummary[]>({ method: "GET", url: "/v1/rules/place" });
       } catch (err) {
-        if (!(err instanceof ScopeError) || err instanceof ScopeExpiredError) throw err;
+        // Only a genuinely missing place scope falls back; any other 403 is a
+        // real authorization problem the caller must see.
+        if (!isMissingScope(err)) throw err;
         return this.call<RuleSummary[]>({ method: "GET", url: "/v1/rules/zone" });
       }
     },

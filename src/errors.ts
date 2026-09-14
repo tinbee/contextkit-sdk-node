@@ -36,9 +36,10 @@ export class ValidationError extends ContextKitError {
   constructor(messages: string[], body: unknown) {
     const error = stringField(body, "error");
     const detail = stringField(body, "detail");
-    const all = messages.length ? messages : detail ? [detail] : [];
-    super(all.join("; ") || "validation failed", "validation", 400, body);
-    this.messages = all;
+    // `messages` stays exactly what the API's `message` said; `detail` only
+    // fills in the human-readable Error message when there is nothing else.
+    super(messages.join("; ") || detail || "validation failed", "validation", 400, body);
+    this.messages = messages;
     this.error = error;
     this.detail = detail;
   }
@@ -53,12 +54,22 @@ export class TokenRevokedError extends ContextKitError {
   }
 }
 
-/** 403 — the grant does not carry the scope this call needs
- *  (`error: "missing_scope"`). Request it at consent. */
+/** 403 other than `scope_expired` — usually the grant does not carry the
+ *  scope this call needs (`error: "missing_scope"`; request it at consent).
+ *  Older APIs send a generic Forbidden body here too, so check
+ *  `isMissingScope(err)` before treating it as a missing scope. */
 export class ScopeError extends ContextKitError {
   constructor(message: string, body: unknown, code = "scope") {
     super(message, code, 403, body);
   }
+}
+
+/** True when a 403 says the grant lacks a scope — the `missing_scope` code, or
+ *  the API's "grant is missing scope …" message from before the code existed. */
+export function isMissingScope(err: unknown): boolean {
+  if (!(err instanceof ScopeError) || err instanceof ScopeExpiredError) return false;
+  const code = stringField(err.body, "error");
+  return code === "missing_scope" || /missing scope/i.test(err.message);
 }
 
 /**

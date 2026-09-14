@@ -1,5 +1,5 @@
 import { ContextKit, toTokenSet } from "../client.js";
-import { ScopeError, ScopeExpiredError, ValidationError } from "../errors.js";
+import { ScopeError, ScopeExpiredError, ValidationError, isMissingScope } from "../errors.js";
 import {
   CONNECTION_EVENTS,
   type SensitiveExpiringEvent,
@@ -138,6 +138,7 @@ describe("error mapping for the two tiers", () => {
     expect(e.error).toBe("invalid_purpose");
     expect(e.detail).toMatch(/not approved/);
     expect(e.message).toMatch(/not approved/);
+    expect(e.messages).toEqual([]);
   });
 
   it("a plain Nest 400 still reads as before", async () => {
@@ -303,6 +304,31 @@ describe("rules.list endpoint choice", () => {
     const rules = await ck.forUser(fresh).rules.list();
     expect(rules).toEqual([{ id: "r1" }]);
     expect(fetch.calls.map(path)).toEqual(["/v1/rules/place", "/v1/rules/zone"]);
+  });
+
+  it("with scopes unknown, rethrows any other 403 instead of falling back", async () => {
+    const { ck, fetch } = make((req) =>
+      req.url.endsWith("/v1/rules/place")
+        ? { status: 403, body: { error: "app_suspended", message: "app is suspended" } }
+        : { body: [{ id: "r1" }] },
+    );
+    const err = await ck
+      .forUser(fresh)
+      .rules.list()
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ScopeError);
+    expect(fetch.calls.map(path)).toEqual(["/v1/rules/place"]);
+  });
+});
+
+describe("isMissingScope", () => {
+  it("is true only for a missing-scope ScopeError", () => {
+    expect(isMissingScope(new ScopeError("x", { error: "missing_scope" }))).toBe(true);
+    expect(isMissingScope(new ScopeError("grant is missing scope y", {}))).toBe(true);
+    expect(isMissingScope(new ScopeError("app is suspended", { error: "app_suspended" }))).toBe(
+      false,
+    );
+    expect(isMissingScope(new Error("missing scope"))).toBe(false);
   });
 });
 
