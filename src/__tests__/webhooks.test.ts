@@ -53,6 +53,25 @@ describe("verifyWebhook", () => {
     ).resolves.toBeDefined();
   });
 
+  it("joins array header parts, so a rotation signature in a later entry still verifies", async () => {
+    const [t, oldSig, newSig] = signWebhook(ruleBody, ["old-secret", SECRET], NOW).split(",");
+    await expect(
+      verifyWebhook({
+        rawBody: ruleBody,
+        signature: [`${t},${oldSig}`, newSig!],
+        secret: SECRET,
+        now: NOW,
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("rejects array header parts that repeat the timestamp", async () => {
+    const header = signWebhook(ruleBody, SECRET, NOW);
+    await expect(
+      verifyWebhook({ rawBody: ruleBody, signature: [header, header], secret: SECRET, now: NOW }),
+    ).rejects.toThrow(/malformed signature header/);
+  });
+
   it("rejects a tampered body", async () => {
     const tampered = ruleBody.replace("Hotel", "Bank");
     await expect(

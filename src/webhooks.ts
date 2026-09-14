@@ -56,7 +56,9 @@ export interface VerifyWebhookParams {
  * WebhookVerificationError on any failure — respond 400 and do NOT act.
  */
 export async function verifyWebhook(params: VerifyWebhookParams): Promise<WebhookEvent> {
-  const header = Array.isArray(params.signature) ? params.signature[0] : params.signature;
+  // A framework may split one header across array entries; join them so every
+  // v1 (rotation) is seen. A repeated t= then still fails as ambiguous.
+  const header = Array.isArray(params.signature) ? params.signature.join(",") : params.signature;
   if (!header) throw new WebhookVerificationError(`missing ${SIGNATURE_HEADER} header`);
   const parsed = parseSignatureHeader(header);
   if (!parsed) throw new WebhookVerificationError("malformed signature header");
