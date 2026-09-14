@@ -4,7 +4,9 @@ import type { WebhookEvent } from "./types.js";
 
 /**
  * ContextKit signs every delivery Stripe-style:
- *   X-ContextKit-Signature: t=<unix seconds>,v1=<hex hmac-sha256(secret, `${t}.${body}`)>
+ *   X-ContextKit-Signature: t=<unix seconds>,v1=<hex hmac-sha256(secret, `${t}.${body}`)>[,v1=...]
+ * While an app webhook endpoint's secret is being rotated, the header carries
+ * one v1 per unexpired secret, so a receiver holding either secret verifies.
  * Retries are re-signed, so a receiver never needs a window wider than
  * realistic clock skew. This must agree byte-for-byte with the API's
  * webhook-delivery.service.ts and the Explorer relay's signature.ts.
@@ -25,7 +27,11 @@ export interface VerifyWebhookParams {
   rawBody: Buffer | string;
   /** The X-ContextKit-Signature header value. */
   signature: string | string[] | undefined;
-  /** The secret returned when the rule or subscription was created. */
+  /**
+   * Your app webhook endpoint's secret, shown once when you register (or
+   * rotate) the endpoint in the developer portal. For a legacy rule or
+   * subscription, the secret returned when it was created.
+   */
   secret: string;
   /** Seconds of clock skew to allow. Default 60, max 300. */
   toleranceS?: number;
@@ -55,13 +61,20 @@ export async function verifyWebhook(params: VerifyWebhookParams): Promise<Webhoo
     ? params.rawBody
     : Buffer.from(params.rawBody, "utf8");
   const expected = signPayload(body, parsed.timestamp, params.secret);
-  if (!parsed.signatures.some((candidate) => constantTimeEquals(candidate, expected))) {
+  // During a secret rotation the header carries one v1 per unexpired secret
+  // (old and new, for 24 h). Any match passes. Every candidate is compared,
+  // in constant time, so timing does not reveal which one matched.
+  let matched = false;
+  for (const candidate of parsed.signatures) {
+    if (constantTimeEquals(candidate, expected)) matched = true;
+  }
+  if (!matched) {
     throw new WebhookVerificationError("no v1 signature matched — wrong secret or tampered body");
   }
 
   const event = parseEvent(body);
-  if (params.replayGuard) {
-    const occurredAtMs = Date.parse(event.occurred_at);
+  if (params.replayGuard && event.event_id !== undefined) {
+    const occurredAtMs = event.occurred_at ? Date.parse(event.occurred_at) : Date.now();
     if (await params.replayGuard.seen(event.event_id, occurredAtMs)) {
       throw new WebhookVerificationError(`event ${event.event_id} already processed`);
     }
@@ -69,11 +82,17 @@ export async function verifyWebhook(params: VerifyWebhookParams): Promise<Webhoo
   return event;
 }
 
-/** Build the header for a body — for tests and for simulating deliveries. */
-export function signWebhook(body: Buffer | string, secret: string, atMs = Date.now()): string {
+/** Build the header for a body — for tests and for simulating deliveries.
+ *  Pass several secrets to simulate a rotation: one v1 per secret. */
+export function signWebhook(
+  body: Buffer | string,
+  secret: string | readonly string[],
+  atMs = Date.now(),
+): string {
   const t = Math.floor(atMs / 1000);
   const buf = Buffer.isBuffer(body) ? body : Buffer.from(body, "utf8");
-  return `t=${t},v1=${signPayload(buf, t, secret)}`;
+  const secrets = typeof secret === "string" ? [secret] : secret;
+  return [`t=${t}`, ...secrets.map((s) => `v1=${signPayload(buf, t, s)}`)].join(",");
 }
 
 export function parseSignatureHeader(
@@ -129,12 +148,14 @@ function parseEvent(body: Buffer): WebhookEvent {
   } catch {
     throw new WebhookVerificationError("body is not JSON");
   }
+  const obj = data as { event_id?: unknown; occurred_at?: unknown; type?: unknown } | null;
+  // A portal "Send test" ping may carry only its type and endpoint ids.
+  const isPing = !!obj && typeof obj === "object" && obj.type === "ping";
   if (
-    !data ||
-    typeof data !== "object" ||
-    typeof (data as { event_id?: unknown }).event_id !== "string" ||
-    typeof (data as { occurred_at?: unknown }).occurred_at !== "string" ||
-    typeof (data as { type?: unknown }).type !== "string"
+    !obj ||
+    typeof obj !== "object" ||
+    typeof obj.type !== "string" ||
+    (!isPing && (typeof obj.event_id !== "string" || typeof obj.occurred_at !== "string"))
   ) {
     throw new WebhookVerificationError("body is not a ContextKit event");
   }

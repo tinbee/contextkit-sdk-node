@@ -1,5 +1,5 @@
 import { WebhookVerificationError } from "../errors.js";
-import { isConnectionEvent, isRuleEvent } from "../types.js";
+import { isConnectionEvent, isPingEvent, isPlacesChangedEvent, isRuleEvent } from "../types.js";
 import { InMemoryReplayGuard, signWebhook, verifyWebhook } from "../webhooks.js";
 
 const SECRET = "0123456789abcdef0123456789abcdef";
@@ -120,6 +120,75 @@ describe("verifyWebhook", () => {
     };
     await expect(verifyWebhook(params)).resolves.toBeDefined();
     await expect(verifyWebhook(params)).rejects.toThrow(/already processed/);
+  });
+
+  it("accepts a rotation header with two v1 signatures, holding either secret", async () => {
+    const OLD = "old-secret-0123456789abcdef";
+    const NEW = "new-secret-0123456789abcdef";
+    const header = signWebhook(ruleBody, [OLD, NEW], NOW);
+    expect(header.match(/v1=/g)).toHaveLength(2);
+    for (const secret of [OLD, NEW]) {
+      await expect(
+        verifyWebhook({ rawBody: ruleBody, signature: header, secret, now: NOW }),
+      ).resolves.toMatchObject({ event_id: "e1" });
+    }
+    await expect(
+      verifyWebhook({ rawBody: ruleBody, signature: header, secret: "third", now: NOW }),
+    ).rejects.toThrow(/no v1 signature matched/);
+  });
+
+  it("still applies tolerance and the replay guard to a two-signature header", async () => {
+    const header = signWebhook(ruleBody, ["a-secret", SECRET], NOW - 120_000);
+    await expect(
+      verifyWebhook({ rawBody: ruleBody, signature: header, secret: SECRET, now: NOW }),
+    ).rejects.toThrow(/tolerance/);
+    const replayGuard = new InMemoryReplayGuard();
+    const params = {
+      rawBody: ruleBody,
+      signature: signWebhook(ruleBody, ["a-secret", SECRET], NOW),
+      secret: SECRET,
+      now: NOW,
+      replayGuard,
+    };
+    await expect(verifyWebhook(params)).resolves.toBeDefined();
+    await expect(verifyWebhook(params)).rejects.toThrow(/already processed/);
+  });
+
+  it("verifies a portal ping and isPingEvent recognises it", async () => {
+    const body = JSON.stringify({ type: "ping", app_id: "app1", endpoint_id: "we1" });
+    const event = await verifyWebhook({
+      rawBody: body,
+      signature: signWebhook(body, SECRET, NOW),
+      secret: SECRET,
+      now: NOW,
+      replayGuard: new InMemoryReplayGuard(),
+    });
+    expect(isPingEvent(event)).toBe(true);
+    expect(isRuleEvent(event)).toBe(false);
+    expect(isConnectionEvent(event)).toBe(false);
+    if (isPingEvent(event)) expect(event.endpoint_id).toBe("we1");
+  });
+
+  it("classifies an app-endpoint connection event without subscription_id", async () => {
+    const body = JSON.stringify({
+      event_id: "e9",
+      grant_id: "g1",
+      app_id: "app1",
+      endpoint_id: "we1",
+      type: "places.changed",
+      occurred_at: "2026-09-12T11:59:55.000Z",
+      places_version: 7,
+    });
+    const event = await verifyWebhook({
+      rawBody: body,
+      signature: signWebhook(body, SECRET, NOW),
+      secret: SECRET,
+      now: NOW,
+    });
+    expect(isConnectionEvent(event)).toBe(true);
+    expect(isPlacesChangedEvent(event)).toBe(true);
+    expect(isPingEvent(event)).toBe(false);
+    expect(event).toMatchObject({ app_id: "app1", endpoint_id: "we1" });
   });
 
   it("rejects a valid signature over a body that is not an event", async () => {

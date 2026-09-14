@@ -92,7 +92,7 @@ await ckUser.rules.createZone({
   label: "Hotel Artemide",
   activeFrom: new Date(checkIn.getTime() - 24 * HOUR), // a Date or an ISO 8601 string
   activeUntil: new Date(checkIn.getTime() + 12 * HOUR),
-  webhookUrl: "https://yourapp.example/hooks/contextkit",
+  // no webhookUrl: delivered to your app's registered webhook endpoints
 });
 ```
 
@@ -139,7 +139,7 @@ Raw-coordinate scopes (`location.latest.read`, `location.history.read`,
 while the rest of the connection keeps working. `tokens.sensitiveScopesExpiresAt`
 (epoch ms) and `ckUser.me()` tell you when.
 
-- **Listen for `sensitive.expiring`.** Subscribe to it and it arrives once 14
+- **Listen for `sensitive.expiring`.** Select it on a webhook endpoint and it arrives once 14
   days and once 7 days before the end (`days_left`). Offer renewal by sending
   the user through consent with the same scopes.
 - **Handle `ScopeExpiredError`.** A sensitive call after the end raises it (it
@@ -179,10 +179,31 @@ Every failure is a `ContextKitError`; the subclass says what to do.
 
 ## Webhooks
 
-Rules and subscriptions deliver signed POSTs. Verify with the **raw** body bytes.
+Webhooks go to **endpoints registered for your app** in the developer portal,
+up to five per app. Each endpoint picks the events it wants: `rule.fired` (every
+place/zone enter, exit and dwell), `places.changed`, `sensitive.expiring`,
+`sensitive.lapsed`, `sensitive.removed`. None selected means all of them.
+Connection events arrive for every connection automatically. The per-connection
+`subscriptions.*` calls are deprecated.
+
+- **One secret per endpoint.** The portal shows it once, when you register the
+  endpoint. Store it in your environment. Rules no longer return a secret of
+  their own.
+- **Rules deliver to your endpoints by default.** Leave `webhookUrl` out of
+  `createZone` / `createPlace`. If you pass one, it must exactly match a
+  registered endpoint URL, or the API answers 400 `webhook_url_not_registered`.
+- **Rotation overlaps for 24 hours.** "Rotate secret" shows the new secret once.
+  The old one keeps working for 24 hours, and during that window every delivery
+  carries two `v1=` signatures, one per secret. `verifyWebhook` accepts a
+  delivery if any of them matches, so deploy the new secret any time within
+  that window.
+- **"Send test"** delivers a `ping` event (`isPingEvent`). Answer it with a 2xx.
+
+Every delivery is a signed POST that carries `app_id` and `endpoint_id`. Verify
+it against the **raw** body bytes.
 
 ```ts
-import { verifyWebhook, isRuleEvent } from "@tinbee/contextkit-sdk";
+import { verifyWebhook, isPingEvent, isRuleEvent } from "@tinbee/contextkit-sdk";
 
 app.post("/hooks/contextkit", express.raw({ type: "application/json" }), async (req, res) => {
   let event;
@@ -195,6 +216,7 @@ app.post("/hooks/contextkit", express.raw({ type: "application/json" }), async (
   } catch {
     return res.status(400).end();
   }
+  if (isPingEvent(event)) return res.status(204).end();
   if (isRuleEvent(event)) queue.enqueue(event);
   res.status(204).end();
 });

@@ -331,6 +331,29 @@ describe("UserClient rules + subscriptions", () => {
     expect(fetch.calls).toHaveLength(0);
   });
 
+  it("omits webhook_url when webhookUrl is not given (app endpoints deliver)", async () => {
+    const { ck, fetch } = make(() => ({ body: { id: "r3", webhook_url: null } }));
+    const user = ck.forUser(fresh);
+    const zone = await user.rules.createZone({
+      type: "enter",
+      lat: 1,
+      lon: 2,
+      radiusM: 300,
+      label: "Hotel",
+    });
+    await user.rules.createPlace({ type: "exit", placeId: "p1" });
+    expect(zone.secret).toBeUndefined();
+    expect(fetch.calls[0]?.body).toEqual({
+      lat: 1,
+      lon: 2,
+      radius_m: 300,
+      label: "Hotel",
+      type: "enter",
+    });
+    expect(fetch.calls[1]?.body).toEqual({ place_id: "p1", type: "exit" });
+    for (const call of fetch.calls) expect(call.body).not.toHaveProperty("webhook_url");
+  });
+
   it("register posts events + webhook_url", async () => {
     const { ck, fetch } = make(() => ({ body: { id: "sub1", secret: "s" } }));
     await ck

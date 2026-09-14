@@ -125,8 +125,13 @@ interface BaseRuleParams {
    */
   activeFrom?: string | Date;
   activeUntil?: string | Date;
-  /** https only. */
-  webhookUrl: string;
+  /**
+   * Omit it to deliver to your app's webhook endpoints subscribed to
+   * `rule.fired` (register them in the developer portal) — the usual choice.
+   * If given, it must exactly equal one of those registered endpoint URLs,
+   * or the API answers 400 `webhook_url_not_registered`.
+   */
+  webhookUrl?: string;
 }
 
 export interface CreatePlaceRuleParams extends BaseRuleParams {
@@ -315,7 +320,7 @@ export class UserClient {
 
   readonly rules = {
     /** Fire a webhook when the user enters / exits / dwells at a shared place.
-     *  The returned `secret` is shown once; keep it to verify deliveries. */
+     *  Deliveries are signed with your app webhook endpoint's secret. */
     createPlace: (params: CreatePlaceRuleParams): Promise<CreatedRule> =>
       this.call<CreatedRule>({
         method: "POST",
@@ -374,9 +379,15 @@ export class UserClient {
       this.call<void>({ method: "DELETE", url: `/v1/rules/zone/${encodeURIComponent(ruleId)}` }),
   };
 
+  /**
+   * @deprecated Connection events (`places.changed`, `sensitive.*`) are now
+   * delivered for every connection to your app's webhook endpoints, registered
+   * once in the developer portal. These routes keep working this release.
+   */
   readonly subscriptions = {
-    /** One subscription per grant; registering again replaces it and mints a
-     *  new secret. */
+    /** @deprecated Register an app webhook endpoint in the developer portal
+     *  instead. One subscription per grant; registering again replaces it and
+     *  mints a new secret. */
     register: (params: {
       events: readonly ConnectionEventName[];
       webhookUrl: string;
@@ -387,9 +398,11 @@ export class UserClient {
         body: { events: [...params.events], webhook_url: params.webhookUrl },
       }),
 
+    /** @deprecated See `subscriptions`. */
     get: (): Promise<SubscriptionSummary | null> =>
       this.call<SubscriptionSummary | null>({ method: "GET", url: "/v1/subscriptions" }),
 
+    /** @deprecated See `subscriptions`. */
     remove: (subscriptionId: string): Promise<void> =>
       this.call<void>({
         method: "DELETE",
@@ -498,7 +511,7 @@ function toMe(raw: MeResponse): Me {
 function ruleBody(params: BaseRuleParams): Record<string, unknown> {
   return {
     type: params.type,
-    webhook_url: params.webhookUrl,
+    ...(params.webhookUrl !== undefined ? { webhook_url: params.webhookUrl } : {}),
     ...(params.dwellMinutes !== undefined ? { dwell_minutes: params.dwellMinutes } : {}),
     ...(params.maxEventAgeS !== undefined ? { max_event_age_s: params.maxEventAgeS } : {}),
     ...(params.activeFrom !== undefined

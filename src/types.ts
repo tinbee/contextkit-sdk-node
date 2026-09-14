@@ -267,13 +267,22 @@ export interface RuleSummary {
   /** The window the rule is evaluated in; null on either side = unbounded. */
   active_from: string | null;
   active_until: string | null;
-  webhook_url: string;
+  /** null = delivered to the app's registered endpoints subscribed to
+   *  `rule.fired`. A URL is always one of those registered endpoints. */
+  webhook_url: string | null;
   disabled_at: string | null;
   created_at: string;
 }
 
-/** Returned once, at creation. Sign-verify every delivery with it. */
-export type CreatedRule = RuleSummary & { secret: string };
+export type CreatedRule = RuleSummary & {
+  /**
+   * @deprecated New rules have no secret of their own: deliveries are signed
+   * with your app webhook endpoint's secret, shown once when you register the
+   * endpoint in the developer portal. Only rules created before app endpoints
+   * returned one, and they keep using it until deleted.
+   */
+  secret?: string;
+};
 
 export const CONNECTION_EVENTS = [
   "places.changed",
@@ -283,6 +292,23 @@ export const CONNECTION_EVENTS = [
 ] as const;
 export type ConnectionEventName = (typeof CONNECTION_EVENTS)[number];
 
+/** What an app webhook endpoint can subscribe to (in the developer portal).
+ *  `rule.fired` covers every place/zone enter, exit and dwell delivery. */
+export const APP_WEBHOOK_EVENTS = ["rule.fired", ...CONNECTION_EVENTS] as const;
+export type AppWebhookEventName = (typeof APP_WEBHOOK_EVENTS)[number];
+
+/** The `type` of a delivery an endpoint receives for `rule.fired`. */
+export const RULE_EVENT_TYPES = [
+  "place.enter",
+  "place.exit",
+  "place.dwell",
+  "zone.enter",
+  "zone.exit",
+  "zone.dwell",
+] as const;
+export type RuleEventType = (typeof RULE_EVENT_TYPES)[number];
+
+/** @deprecated Subscriptions are replaced by app webhook endpoints. */
 export interface SubscriptionSummary {
   id: string;
   events: string[];
@@ -291,26 +317,36 @@ export interface SubscriptionSummary {
   created_at: string;
 }
 
+/** @deprecated Subscriptions are replaced by app webhook endpoints. */
 export type CreatedSubscription = SubscriptionSummary & { secret: string };
 
 // ---------------------------------------------------------------------------
 // Webhook bodies
 
-export interface RuleWebhookEvent {
+/**
+ * Fields every delivery carries. `app_id` and `endpoint_id` identify the app
+ * webhook endpoint that received it; both are absent on deliveries from a
+ * legacy per-rule URL or a (deprecated) subscription.
+ */
+interface WebhookEventBase {
   event_id: string;
+  occurred_at: string;
+  app_id?: string;
+  endpoint_id?: string;
+}
+
+/** A rule fired (endpoint subscription `rule.fired`). */
+export interface RuleWebhookEvent extends WebhookEventBase {
   rule_id: string;
   grant_id: string;
-  /** "place.enter" | "place.exit" | "place.dwell" | "zone.enter" | ... */
-  type: string;
-  occurred_at: string;
+  type: RuleEventType;
   target: { place_id?: string; label: string };
 }
 
-interface ConnectionEventBase {
-  event_id: string;
-  subscription_id: string;
+interface ConnectionEventBase extends WebhookEventBase {
   grant_id: string;
-  occurred_at: string;
+  /** Only on deliveries through a deprecated subscription. */
+  subscription_id?: string;
 }
 
 /** The set of places the user shares with this app changed. */
@@ -345,28 +381,42 @@ export interface SensitiveRemovedEvent extends ConnectionEventBase {
 export type ConnectionWebhookEvent =
   PlacesChangedEvent | SensitiveExpiringEvent | SensitiveLapsedEvent | SensitiveRemovedEvent;
 
-export type WebhookEvent = RuleWebhookEvent | ConnectionWebhookEvent;
+/** Sent by "Send test" in the developer portal. Acknowledge it with a 2xx and
+ *  do nothing else. */
+export interface PingEvent {
+  type: "ping";
+  app_id: string;
+  endpoint_id: string;
+  event_id?: string;
+  occurred_at?: string;
+}
+
+export type WebhookEvent = RuleWebhookEvent | ConnectionWebhookEvent | PingEvent;
+
+export function isPingEvent(event: WebhookEvent): event is PingEvent {
+  return event.type === "ping";
+}
 
 export function isRuleEvent(event: WebhookEvent): event is RuleWebhookEvent {
   return "rule_id" in event;
 }
 
 export function isConnectionEvent(event: WebhookEvent): event is ConnectionWebhookEvent {
-  return "subscription_id" in event;
+  return (CONNECTION_EVENTS as readonly string[]).includes(event.type);
 }
 
 export function isPlacesChangedEvent(event: WebhookEvent): event is PlacesChangedEvent {
-  return isConnectionEvent(event) && event.type === "places.changed";
+  return event.type === "places.changed";
 }
 
 export function isSensitiveExpiringEvent(event: WebhookEvent): event is SensitiveExpiringEvent {
-  return isConnectionEvent(event) && event.type === "sensitive.expiring";
+  return event.type === "sensitive.expiring";
 }
 
 export function isSensitiveLapsedEvent(event: WebhookEvent): event is SensitiveLapsedEvent {
-  return isConnectionEvent(event) && event.type === "sensitive.lapsed";
+  return event.type === "sensitive.lapsed";
 }
 
 export function isSensitiveRemovedEvent(event: WebhookEvent): event is SensitiveRemovedEvent {
-  return isConnectionEvent(event) && event.type === "sensitive.removed";
+  return event.type === "sensitive.removed";
 }
