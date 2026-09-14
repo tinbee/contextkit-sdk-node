@@ -153,6 +153,8 @@ describe("error mapping for the two tiers", () => {
     expect(err).toBeInstanceOf(ValidationError);
     expect(err.messages).toEqual(["from must be ISO 8601"]);
     expect(err.detail).toBeNull();
+    // Nest's reason phrase is not a machine code.
+    expect(err.error).toBeNull();
   });
 });
 

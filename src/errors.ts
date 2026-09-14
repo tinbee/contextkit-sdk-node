@@ -34,7 +34,10 @@ export class ValidationError extends ContextKitError {
   readonly error: string | null;
   readonly detail: string | null;
   constructor(messages: string[], body: unknown) {
-    const error = stringField(body, "error");
+    // Only a machine code counts: Nest's generic reason phrase ("Bad Request")
+    // is not one, so it reads as null rather than being mistaken for a code.
+    const rawError = stringField(body, "error");
+    const error = rawError && /^[a-z][a-z0-9_]*$/.test(rawError) ? rawError : null;
     const detail = stringField(body, "detail");
     // `messages` stays exactly what the API's `message` said; `detail` only
     // fills in the human-readable Error message when there is nothing else.

@@ -2,6 +2,7 @@ import { WebhookVerificationError } from "../errors.js";
 import {
   type WebhookEvent,
   isConnectionEvent,
+  isKnownEvent,
   isPingEvent,
   isPlacesChangedEvent,
   isRuleEvent,
@@ -9,7 +10,13 @@ import {
   isSensitiveLapsedEvent,
   isSensitiveRemovedEvent,
 } from "../types.js";
-import { InMemoryReplayGuard, MAX_SIGNATURES, signWebhook, verifyWebhook } from "../webhooks.js";
+import {
+  InMemoryReplayGuard,
+  MAX_SIGNATURES,
+  parseSignatureHeader,
+  signWebhook,
+  verifyWebhook,
+} from "../webhooks.js";
 
 const SECRET = "0123456789abcdef0123456789abcdef";
 const NOW = Date.parse("2026-09-12T12:00:00.000Z");
@@ -338,7 +345,12 @@ describe("verifyWebhook", () => {
       now: NOW,
     });
     expect(event.type).toBe("visits.summarised");
+    expect(isKnownEvent(event)).toBe(false);
     expect(isRuleEvent(event) || isConnectionEvent(event) || isPingEvent(event)).toBe(false);
+  });
+
+  it.each(["123.4", "1e9", "-5", "+5", ""])("refuses a non-integer timestamp t=%s", (t) => {
+    expect(parseSignatureHeader(`t=${t},v1=${"a".repeat(64)}`)).toBeNull();
   });
 
   it("signWebhook refuses an empty secret list", () => {

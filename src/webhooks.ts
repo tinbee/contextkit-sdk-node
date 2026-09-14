@@ -126,9 +126,9 @@ export function parseSignatureHeader(
     const key = part.slice(0, eq).trim();
     const value = part.slice(eq + 1).trim();
     if (key === "t") {
-      const n = Number(value);
-      if (!Number.isFinite(n)) return null;
-      timestamp = n;
+      // Whole unix seconds only: no fractions, exponents or signs.
+      if (!/^\d{1,12}$/.test(value)) return null;
+      timestamp = Number(value);
     } else if (key === "v1") {
       // Always a hex SHA-256 HMAC; anything else is refused before any hashing.
       if (!V1_SIGNATURE.test(value)) return null;

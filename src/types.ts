@@ -392,7 +392,28 @@ export interface PingEvent {
   occurred_at?: string;
 }
 
-export type WebhookEvent = RuleWebhookEvent | ConnectionWebhookEvent | PingEvent;
+/** Every event type this SDK version knows, each checked against its full shape. */
+export type KnownWebhookEvent = RuleWebhookEvent | ConnectionWebhookEvent | PingEvent;
+
+/**
+ * A delivery whose `type` is newer than this SDK. verifyWebhook still returns it
+ * (signature and common fields checked) so you can acknowledge it with a 2xx and
+ * ignore it; upgrade the SDK to handle it.
+ */
+export interface UnknownWebhookEvent {
+  type: string;
+  event_id: string;
+  occurred_at: string;
+  app_id?: string;
+  endpoint_id?: string;
+  [field: string]: unknown;
+}
+
+/**
+ * What verifyWebhook returns. Narrow with the `is*Event` guards (or isKnownEvent)
+ * rather than by comparing `type` alone: an unknown event's `type` is any string.
+ */
+export type WebhookEvent = KnownWebhookEvent | UnknownWebhookEvent;
 
 // The guards check each shape's required fields, not just `type`: they are type
 // predicates, and verifyWebhook only validates what every event has in common.
@@ -408,6 +429,10 @@ function isStringArray(value: unknown): value is string[] {
 
 function isEventBase(event: Fields): boolean {
   return hasStrings(event, "event_id", "occurred_at");
+}
+
+export function isKnownEvent(event: WebhookEvent): event is KnownWebhookEvent {
+  return isPingEvent(event) || isRuleEvent(event) || isConnectionEvent(event);
 }
 
 export function isPingEvent(event: WebhookEvent): event is PingEvent {
