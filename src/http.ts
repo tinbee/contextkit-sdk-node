@@ -4,6 +4,7 @@ import {
   NotFoundError,
   RateLimitedError,
   ScopeError,
+  ScopeExpiredError,
   TimeoutError,
   ValidationError,
 } from "./errors.js";
@@ -93,6 +94,7 @@ export async function request<T>(opts: HttpOptions, req: HttpRequest): Promise<H
     case 401:
       throw new UnauthorizedSignal(data);
     case 403:
+      if (isErrorCode(data, "scope_expired")) throw new ScopeExpiredError(message, data);
       throw new ScopeError(message, data);
     case 404:
       throw new NotFoundError(message, data);
@@ -101,6 +103,10 @@ export async function request<T>(opts: HttpOptions, req: HttpRequest): Promise<H
     default:
       throw new ApiError(message, status, data);
   }
+}
+
+function isErrorCode(data: unknown, code: string): boolean {
+  return !!data && typeof data === "object" && (data as { error?: unknown }).error === code;
 }
 
 function withQuery(url: string, query: HttpRequest["query"]): string {

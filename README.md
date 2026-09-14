@@ -5,7 +5,7 @@ connected user's location — "are they inside this zone right now?" — without
 holding their coordinates.
 
 Full documentation lives at **[docs.contextkit.com](https://docs.contextkit.com)**.
-This README covers only the connect flow.
+This README covers the connect flow and the essentials around it.
 
 ```sh
 pnpm add @tinbee/contextkit-sdk
@@ -111,18 +111,71 @@ If all you have left is a stored token, `ck.revokeToken(token)` does the same
 without a handle. Either kind of token works, and revoking one that is already
 dead is a success, not an error.
 
+## Purposes
+
+Every read of raw coordinates — `locations.latest`, `at`, `range` and `days` —
+must name a **purpose**: the key of a purpose you registered for your app in the
+developer portal. It is required; the SDK refuses a call without one.
+
+```ts
+const { point } = await ckUser.locations.latest({ purpose: "arrival_check" });
+```
+
+Each purpose is a key (`^[a-z][a-z0-9_]{2,39}$`), a one-sentence description,
+the sensitive scopes it may use and how many calls a day you expect. ContextKit
+reviews it before a production app can use it, and the API answers
+`ValidationError` (`error: "invalid_purpose"`, with a `detail`) for a purpose
+that is unknown, unapproved, or not allowed for that scope.
+
+Purposes are how end users decide whether to trust your app. They see your
+descriptions, verbatim, on the consent screen, next to every access in their
+access log, and again when they renew. Write them for that reader: say what
+you do with the location and why, in words they would recognise.
+
+## When sensitive access ends
+
+Raw-coordinate scopes (`location.latest.read`, `location.history.read`,
+`location.lookup`) expire on their own clock — 1 to 90 days, chosen by the user —
+while the rest of the connection keeps working. `tokens.sensitiveScopesExpiresAt`
+(epoch ms) and `ckUser.me()` tell you when.
+
+- **Listen for `sensitive.expiring`.** Subscribe to it and it arrives once 14
+  days and once 7 days before the end (`days_left`). Offer renewal by sending
+  the user through consent with the same scopes.
+- **Handle `ScopeExpiredError`.** A sensitive call after the end raises it (it
+  is a `ScopeError`). Show that access to their location has ended and offer
+  to renew through consent. Until `renewalGraceEndsAt` renewal is one tap; after
+  it the scopes are removed (`sensitive.removed`) and it is a fresh request.
+  Do not retry the call.
+- **Keep it quiet.** Show at most one non-blocking notice per event, as the
+  Acceptable Use Policy requires. Never gate the rest of your product on it.
+
+```ts
+import { ScopeExpiredError, isSensitiveExpiringEvent } from "@tinbee/contextkit-sdk";
+
+try {
+  await ckUser.locations.latest({ purpose: "arrival_check" });
+} catch (err) {
+  if (err instanceof ScopeExpiredError) return showRenewNotice(err.renewalGraceEndsAt);
+  throw err;
+}
+
+if (isSensitiveExpiringEvent(event)) notifyOnce(event.grant_id, event.days_left);
+```
+
 ## Errors
 
 Every failure is a `ContextKitError`; the subclass says what to do.
 
-| Error                          | Meaning                                             | Do                       |
-| ------------------------------ | --------------------------------------------------- | ------------------------ |
-| `TokenRevokedError`            | The grant is gone (revoked, expired, replayed).     | Send the user to step 1. |
-| `RateLimitedError`             | Per-app budget or rate limit. `retryAfterSeconds`.  | Wait, then retry.        |
-| `ScopeError`                   | The grant lacks the scope this call needs.          | Request it at step 1.    |
-| `NotFoundError`                | Unshared and nonexistent look identical on purpose. | Refresh your place list. |
-| `ValidationError`              | Request shape was wrong. `messages` says how.       | Fix the call.            |
-| `TimeoutError`, `NetworkError` | Transient.                                          | Retry with backoff.      |
+| Error                          | Meaning                                                 | Do                           |
+| ------------------------------ | ------------------------------------------------------- | ---------------------------- |
+| `TokenRevokedError`            | The grant is gone (revoked, expired, replayed).         | Send the user to step 1.     |
+| `RateLimitedError`             | Per-app budget or rate limit. `retryAfterSeconds`.      | Wait, then retry.            |
+| `ScopeExpiredError`            | The sensitive tier lapsed; the rest still works.        | Say it ended; renew, step 1. |
+| `ScopeError`                   | The grant lacks the scope this call needs.              | Request it at step 1.        |
+| `NotFoundError`                | Unshared and nonexistent look identical on purpose.     | Refresh your place list.     |
+| `ValidationError`              | Request shape was wrong. `messages` / `detail` say how. | Fix the call.                |
+| `TimeoutError`, `NetworkError` | Transient.                                              | Retry with backoff.          |
 
 ## Webhooks
 

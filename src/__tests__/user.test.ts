@@ -206,12 +206,17 @@ describe("UserClient locations", () => {
     const { ck, fetch } = make(() => ({ body: { points: [] } }));
     const user = ck.forUser(fresh);
     await user.locations.range({
+      purpose: "trip_timeline",
       from: "2026-09-01T00:00:00Z",
       to: "2026-09-02T00:00:00Z",
       minIntervalS: 0,
     });
     expect(fetch.calls[0]?.url).toContain("min_interval_s=0");
-    await user.locations.range({ from: "2026-09-01T00:00:00Z", to: "2026-09-02T00:00:00Z" });
+    await user.locations.range({
+      purpose: "trip_timeline",
+      from: "2026-09-01T00:00:00Z",
+      to: "2026-09-02T00:00:00Z",
+    });
     expect(fetch.calls[1]?.url).not.toContain("min_interval_s");
   });
 });

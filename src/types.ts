@@ -55,6 +55,9 @@ export interface TokenResponse {
   scope: string;
   /** Pairwise per-app user id. Present once the API ships it; optional until then. */
   sub?: string;
+  /** When the sensitive tier (raw coordinates) stops working, ISO 8601. Absent
+   *  or null when the grant holds no sensitive scope. */
+  sensitive_scopes_expire_at?: string | null;
 }
 
 /** What the integrator persists per user. Refresh tokens ROTATE: every
@@ -67,8 +70,73 @@ export interface TokenSet {
   refreshToken: string;
   /** ISO timestamp of the grant's horizon, or null for no expiry. */
   refreshTokenExpiresAt: string | null;
+  /** The EFFECTIVE scopes: a lapsed sensitive tier is no longer listed. */
   scopes: AppScope[];
   sub: string | null;
+  /**
+   * Epoch milliseconds when the sensitive scopes (raw coordinates) stop
+   * working, or null when the grant holds none. The rest of the grant keeps
+   * working past this; renew the sensitive tier by sending the user through
+   * consent again.
+   */
+  sensitiveScopesExpiresAt: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Purposes
+
+/**
+ * A registered purpose key, as created in the developer portal. Every read of
+ * raw coordinates names one; the user sees its description on consent, in
+ * their access log and on renewal.
+ */
+export const PURPOSE_KEY_PATTERN = /^[a-z][a-z0-9_]{2,39}$/;
+
+export function isPurposeKey(value: unknown): value is string {
+  return typeof value === "string" && PURPOSE_KEY_PATTERN.test(value);
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/me
+
+/** Raw body of GET /v1/me. */
+export interface MeResponse {
+  sub: string;
+  external_user_id: string | null;
+  /** Effective scopes. */
+  scopes: string[];
+  /** Every scope on the grant, including a lapsed sensitive tier still in its
+   *  renewal grace. Absent from APIs older than the two-tier release. */
+  held_scopes?: string[];
+  places_version?: number;
+  grant_expires_at?: string | null;
+  expires_at?: string | null;
+  sensitive_expires_at?: string | null;
+  sensitive_lapsed_at?: string | null;
+  renewal_grace_ends_at?: string | null;
+  connected_at: string | null;
+}
+
+/** Who this connection is, from the app's side. Timestamps are ISO 8601. */
+export interface Me {
+  /** Pairwise per-app user id. */
+  sub: string;
+  externalUserId: string | null;
+  /** What calls may use right now. */
+  scopes: AppScope[];
+  /** Everything the grant holds, including a lapsed sensitive tier that can
+   *  still be renewed in one tap. */
+  heldScopes: AppScope[];
+  placesVersion: number | null;
+  /** The whole grant's horizon (standard tier); null = never. */
+  expiresAt: string | null;
+  /** When the sensitive tier stops (or stopped) working; null = none held. */
+  sensitiveExpiresAt: string | null;
+  /** Set once the sensitive tier has lapsed. */
+  sensitiveLapsedAt: string | null;
+  /** After this, lapsed sensitive scopes are removed from the grant. */
+  renewalGraceEndsAt: string | null;
+  connectedAt: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +275,12 @@ export interface RuleSummary {
 /** Returned once, at creation. Sign-verify every delivery with it. */
 export type CreatedRule = RuleSummary & { secret: string };
 
-export const CONNECTION_EVENTS = ["places.changed"] as const;
+export const CONNECTION_EVENTS = [
+  "places.changed",
+  "sensitive.expiring",
+  "sensitive.lapsed",
+  "sensitive.removed",
+] as const;
 export type ConnectionEventName = (typeof CONNECTION_EVENTS)[number];
 
 export interface SubscriptionSummary {
@@ -233,14 +306,44 @@ export interface RuleWebhookEvent {
   target: { place_id?: string; label: string };
 }
 
-export interface ConnectionWebhookEvent {
+interface ConnectionEventBase {
   event_id: string;
   subscription_id: string;
   grant_id: string;
-  type: ConnectionEventName;
   occurred_at: string;
+}
+
+/** The set of places the user shares with this app changed. */
+export interface PlacesChangedEvent extends ConnectionEventBase {
+  type: "places.changed";
   places_version: number;
 }
+
+/** The sensitive tier ends soon — sent once at 14 days and once at 7. */
+export interface SensitiveExpiringEvent extends ConnectionEventBase {
+  type: "sensitive.expiring";
+  sensitive_expires_at: string;
+  days_left: 14 | 7;
+  scopes: string[];
+}
+
+/** The sensitive tier has ended. The scopes stay renewable until
+ *  `renewal_grace_ends_at`. */
+export interface SensitiveLapsedEvent extends ConnectionEventBase {
+  type: "sensitive.lapsed";
+  sensitive_expires_at: string;
+  renewal_grace_ends_at: string;
+  scopes: string[];
+}
+
+/** The renewal grace ended; the sensitive scopes were removed from the grant. */
+export interface SensitiveRemovedEvent extends ConnectionEventBase {
+  type: "sensitive.removed";
+  scopes: string[];
+}
+
+export type ConnectionWebhookEvent =
+  PlacesChangedEvent | SensitiveExpiringEvent | SensitiveLapsedEvent | SensitiveRemovedEvent;
 
 export type WebhookEvent = RuleWebhookEvent | ConnectionWebhookEvent;
 
@@ -250,4 +353,20 @@ export function isRuleEvent(event: WebhookEvent): event is RuleWebhookEvent {
 
 export function isConnectionEvent(event: WebhookEvent): event is ConnectionWebhookEvent {
   return "subscription_id" in event;
+}
+
+export function isPlacesChangedEvent(event: WebhookEvent): event is PlacesChangedEvent {
+  return isConnectionEvent(event) && event.type === "places.changed";
+}
+
+export function isSensitiveExpiringEvent(event: WebhookEvent): event is SensitiveExpiringEvent {
+  return isConnectionEvent(event) && event.type === "sensitive.expiring";
+}
+
+export function isSensitiveLapsedEvent(event: WebhookEvent): event is SensitiveLapsedEvent {
+  return isConnectionEvent(event) && event.type === "sensitive.lapsed";
+}
+
+export function isSensitiveRemovedEvent(event: WebhookEvent): event is SensitiveRemovedEvent {
+  return isConnectionEvent(event) && event.type === "sensitive.removed";
 }
