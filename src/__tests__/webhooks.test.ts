@@ -1,5 +1,14 @@
 import { WebhookVerificationError } from "../errors.js";
-import { isConnectionEvent, isPingEvent, isPlacesChangedEvent, isRuleEvent } from "../types.js";
+import {
+  type WebhookEvent,
+  isConnectionEvent,
+  isPingEvent,
+  isPlacesChangedEvent,
+  isRuleEvent,
+  isSensitiveExpiringEvent,
+  isSensitiveLapsedEvent,
+  isSensitiveRemovedEvent,
+} from "../types.js";
 import { InMemoryReplayGuard, MAX_SIGNATURES, signWebhook, verifyWebhook } from "../webhooks.js";
 
 const SECRET = "0123456789abcdef0123456789abcdef";
@@ -245,6 +254,45 @@ describe("verifyWebhook", () => {
     await expect(
       verifyWebhook({ rawBody: ruleBody, signature: header, secret: SECRET, now: NOW }),
     ).rejects.toThrow(/malformed signature header/);
+  });
+
+  it("type guards check each shape's required fields, not just type", () => {
+    const base = { event_id: "e1", occurred_at: "2026-09-12T11:59:50.000Z", grant_id: "g1" };
+    const as = (v: object): WebhookEvent => v as WebhookEvent;
+    expect(isRuleEvent(as({ ...base, rule_id: "r1", type: "zone.enter" }))).toBe(false);
+    expect(
+      isRuleEvent(as({ ...base, rule_id: "r1", type: "zone.teleport", target: { label: "x" } })),
+    ).toBe(false);
+    expect(
+      isRuleEvent(as({ ...base, rule_id: "r1", type: "zone.enter", target: { label: "x" } })),
+    ).toBe(true);
+    expect(isPingEvent(as({ type: "ping" }))).toBe(false);
+    expect(isPlacesChangedEvent(as({ ...base, type: "places.changed" }))).toBe(false);
+    expect(isConnectionEvent(as({ ...base, type: "places.changed" }))).toBe(false);
+    expect(
+      isSensitiveExpiringEvent(
+        as({
+          ...base,
+          type: "sensitive.expiring",
+          sensitive_expires_at: "t",
+          days_left: 3,
+          scopes: [],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isSensitiveLapsedEvent(
+        as({ ...base, type: "sensitive.lapsed", sensitive_expires_at: "t", scopes: [] }),
+      ),
+    ).toBe(false);
+    expect(isSensitiveRemovedEvent(as({ ...base, type: "sensitive.removed", scopes: [1] }))).toBe(
+      false,
+    );
+    expect(
+      isSensitiveRemovedEvent(
+        as({ ...base, type: "sensitive.removed", scopes: ["location.lookup"] }),
+      ),
+    ).toBe(true);
   });
 
   it("signWebhook refuses an empty secret list", () => {

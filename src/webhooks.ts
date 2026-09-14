@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { WebhookVerificationError } from "./errors.js";
 import type { WebhookEvent } from "./types.js";
 
@@ -183,8 +183,9 @@ function isDate(value: string): boolean {
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
-  const left = Buffer.from(a, "utf8");
-  const right = Buffer.from(b, "utf8");
-  if (left.length !== right.length) return false;
+  // Hash both sides to a fixed length first, so a candidate of the wrong length
+  // takes the same comparison path instead of returning early.
+  const left = createHash("sha256").update(a, "utf8").digest();
+  const right = createHash("sha256").update(b, "utf8").digest();
   return timingSafeEqual(left, right);
 }

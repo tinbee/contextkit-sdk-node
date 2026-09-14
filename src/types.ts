@@ -394,30 +394,78 @@ export interface PingEvent {
 
 export type WebhookEvent = RuleWebhookEvent | ConnectionWebhookEvent | PingEvent;
 
+// The guards check each shape's required fields, not just `type`: they are type
+// predicates, and verifyWebhook only validates what every event has in common.
+type Fields = Record<string, unknown>;
+
+function hasStrings(event: Fields, ...keys: string[]): boolean {
+  return keys.every((key) => typeof event[key] === "string");
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isEventBase(event: Fields): boolean {
+  return hasStrings(event, "event_id", "occurred_at");
+}
+
 export function isPingEvent(event: WebhookEvent): event is PingEvent {
-  return event.type === "ping";
+  const e = event as unknown as Fields;
+  return e.type === "ping" && hasStrings(e, "app_id", "endpoint_id");
 }
 
 export function isRuleEvent(event: WebhookEvent): event is RuleWebhookEvent {
-  return "rule_id" in event;
+  const e = event as unknown as Fields;
+  const target = e.target as Fields | null | undefined;
+  return (
+    isEventBase(e) &&
+    hasStrings(e, "rule_id", "grant_id") &&
+    (RULE_EVENT_TYPES as readonly unknown[]).includes(e.type) &&
+    !!target &&
+    typeof target === "object" &&
+    typeof target.label === "string" &&
+    (target.place_id === undefined || typeof target.place_id === "string")
+  );
 }
 
 export function isConnectionEvent(event: WebhookEvent): event is ConnectionWebhookEvent {
-  return (CONNECTION_EVENTS as readonly string[]).includes(event.type);
+  return (
+    isPlacesChangedEvent(event) ||
+    isSensitiveExpiringEvent(event) ||
+    isSensitiveLapsedEvent(event) ||
+    isSensitiveRemovedEvent(event)
+  );
+}
+
+function isConnectionBase(event: WebhookEvent, type: ConnectionEventName): Fields | null {
+  const e = event as unknown as Fields;
+  return e.type === type && isEventBase(e) && hasStrings(e, "grant_id") ? e : null;
 }
 
 export function isPlacesChangedEvent(event: WebhookEvent): event is PlacesChangedEvent {
-  return event.type === "places.changed";
+  const e = isConnectionBase(event, "places.changed");
+  return !!e && Number.isInteger(e.places_version);
 }
 
 export function isSensitiveExpiringEvent(event: WebhookEvent): event is SensitiveExpiringEvent {
-  return event.type === "sensitive.expiring";
+  const e = isConnectionBase(event, "sensitive.expiring");
+  return (
+    !!e &&
+    hasStrings(e, "sensitive_expires_at") &&
+    (e.days_left === 14 || e.days_left === 7) &&
+    isStringArray(e.scopes)
+  );
 }
 
 export function isSensitiveLapsedEvent(event: WebhookEvent): event is SensitiveLapsedEvent {
-  return event.type === "sensitive.lapsed";
+  const e = isConnectionBase(event, "sensitive.lapsed");
+  return (
+    !!e && hasStrings(e, "sensitive_expires_at", "renewal_grace_ends_at") && isStringArray(e.scopes)
+  );
 }
 
 export function isSensitiveRemovedEvent(event: WebhookEvent): event is SensitiveRemovedEvent {
-  return event.type === "sensitive.removed";
+  const e = isConnectionBase(event, "sensitive.removed");
+  return !!e && isStringArray(e.scopes);
 }
