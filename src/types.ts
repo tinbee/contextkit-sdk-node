@@ -419,6 +419,14 @@ export type WebhookEvent = KnownWebhookEvent | UnknownWebhookEvent;
 // predicates, and verifyWebhook only validates what every event has in common.
 type Fields = Record<string, unknown>;
 
+/** The value as a plain object, or null — so a guard given null, a string or an
+ *  array (from plain JS or an unsafe cast) returns false instead of throwing. */
+function asFields(value: unknown): Fields | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Fields)
+    : null;
+}
+
 function hasStrings(event: Fields, ...keys: string[]): boolean {
   return keys.every((key) => typeof event[key] === "string");
 }
@@ -436,19 +444,19 @@ export function isKnownEvent(event: WebhookEvent): event is KnownWebhookEvent {
 }
 
 export function isPingEvent(event: WebhookEvent): event is PingEvent {
-  const e = event as unknown as Fields;
-  return e.type === "ping" && hasStrings(e, "app_id", "endpoint_id");
+  const e = asFields(event);
+  return !!e && e.type === "ping" && hasStrings(e, "app_id", "endpoint_id");
 }
 
 export function isRuleEvent(event: WebhookEvent): event is RuleWebhookEvent {
-  const e = event as unknown as Fields;
-  const target = e.target as Fields | null | undefined;
+  const e = asFields(event);
+  if (!e) return false;
+  const target = asFields(e.target);
   return (
     isEventBase(e) &&
     hasStrings(e, "rule_id", "grant_id") &&
     (RULE_EVENT_TYPES as readonly unknown[]).includes(e.type) &&
     !!target &&
-    typeof target === "object" &&
     typeof target.label === "string" &&
     (target.place_id === undefined || typeof target.place_id === "string")
   );
@@ -464,8 +472,8 @@ export function isConnectionEvent(event: WebhookEvent): event is ConnectionWebho
 }
 
 function isConnectionBase(event: WebhookEvent, type: ConnectionEventName): Fields | null {
-  const e = event as unknown as Fields;
-  return e.type === type && isEventBase(e) && hasStrings(e, "grant_id") ? e : null;
+  const e = asFields(event);
+  return e && e.type === type && isEventBase(e) && hasStrings(e, "grant_id") ? e : null;
 }
 
 export function isPlacesChangedEvent(event: WebhookEvent): event is PlacesChangedEvent {

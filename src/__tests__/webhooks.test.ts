@@ -353,6 +353,25 @@ describe("verifyWebhook", () => {
     expect(parseSignatureHeader(`t=${t},v1=${"a".repeat(64)}`)).toBeNull();
   });
 
+  it.each([null, undefined, "ping", 42, [], [{ type: "ping" }]])(
+    "every guard returns false, never throws, for %p",
+    (value) => {
+      const v = value as unknown as WebhookEvent;
+      for (const guard of [
+        isKnownEvent,
+        isPingEvent,
+        isRuleEvent,
+        isConnectionEvent,
+        isPlacesChangedEvent,
+        isSensitiveExpiringEvent,
+        isSensitiveLapsedEvent,
+        isSensitiveRemovedEvent,
+      ]) {
+        expect(guard(v)).toBe(false);
+      }
+    },
+  );
+
   it("signWebhook refuses an empty secret list", () => {
     expect(() => signWebhook("{}", [], NOW)).toThrow(/at least one secret/);
   });
