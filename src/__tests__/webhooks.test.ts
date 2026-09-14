@@ -219,6 +219,20 @@ describe("verifyWebhook", () => {
       "an event with an unparseable occurred_at",
       { event_id: "e1", type: "x", occurred_at: "soon" },
     ],
+    [
+      "a known connection type missing its fields",
+      { event_id: "e1", type: "places.changed", occurred_at: "2026-09-12T11:59:50.000Z" },
+    ],
+    [
+      "a known rule type missing its target",
+      {
+        event_id: "e1",
+        rule_id: "r1",
+        grant_id: "g1",
+        type: "zone.enter",
+        occurred_at: "2026-09-12T11:59:50.000Z",
+      },
+    ],
   ])("rejects %s", async (_label, payload) => {
     const body = JSON.stringify(payload);
     await expect(
@@ -309,6 +323,22 @@ describe("verifyWebhook", () => {
   it("signWebhook refuses more secrets than verifyWebhook accepts", () => {
     const secrets = Array.from({ length: MAX_SIGNATURES + 1 }, (_, i) => `s${i}`);
     expect(() => signWebhook("{}", secrets, NOW)).toThrow(/at most/);
+  });
+
+  it("still accepts an event type newer than this SDK, on its common fields", async () => {
+    const body = JSON.stringify({
+      event_id: "e7",
+      type: "visits.summarised",
+      occurred_at: "2026-09-12T11:59:55.000Z",
+    });
+    const event = await verifyWebhook({
+      rawBody: body,
+      signature: signWebhook(body, SECRET, NOW),
+      secret: SECRET,
+      now: NOW,
+    });
+    expect(event.type).toBe("visits.summarised");
+    expect(isRuleEvent(event) || isConnectionEvent(event) || isPingEvent(event)).toBe(false);
   });
 
   it("signWebhook refuses an empty secret list", () => {

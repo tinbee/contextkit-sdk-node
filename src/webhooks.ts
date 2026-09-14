@@ -1,6 +1,13 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { WebhookVerificationError } from "./errors.js";
-import type { WebhookEvent } from "./types.js";
+import {
+  CONNECTION_EVENTS,
+  RULE_EVENT_TYPES,
+  type WebhookEvent,
+  isConnectionEvent,
+  isPingEvent,
+  isRuleEvent,
+} from "./types.js";
 
 /**
  * ContextKit signs every delivery Stripe-style:
@@ -173,17 +180,28 @@ function parseEvent(body: Buffer): WebhookEvent {
   if (occurredAt !== undefined && !(typeof occurredAt === "string" && isDate(occurredAt))) {
     throw new WebhookVerificationError("body is not a ContextKit event");
   }
-  const valid =
-    obj.type === "ping"
-      ? // A portal "Send test" ping carries its endpoint ids; the rest is optional.
-        typeof obj.app_id === "string" &&
-        typeof obj.endpoint_id === "string" &&
-        (obj.event_id === undefined || typeof obj.event_id === "string")
-      : typeof obj.type === "string" &&
-        typeof obj.event_id === "string" &&
-        typeof occurredAt === "string";
+  const event = data as WebhookEvent;
+  const type = obj.type;
+  let valid: boolean;
+  if (type === "ping") {
+    // A portal "Send test" ping carries its endpoint ids; the rest is optional.
+    valid = isPingEvent(event) && (obj.event_id === undefined || typeof obj.event_id === "string");
+  } else if ((RULE_EVENT_TYPES as readonly unknown[]).includes(type)) {
+    valid = isRuleEvent(event);
+  } else if ((CONNECTION_EVENTS as readonly unknown[]).includes(type)) {
+    valid = isConnectionEvent(event);
+  } else {
+    // A type newer than this SDK: accepted on the common fields so a receiver
+    // can acknowledge and ignore it, rather than failing until the endpoint is
+    // disabled. Every type this SDK knows was checked against its full shape
+    // above, so narrowing on a known `type` is safe.
+    valid =
+      typeof type === "string" &&
+      typeof obj.event_id === "string" &&
+      typeof occurredAt === "string";
+  }
   if (!valid) throw new WebhookVerificationError("body is not a ContextKit event");
-  return data as WebhookEvent;
+  return event;
 }
 
 function isDate(value: string): boolean {
