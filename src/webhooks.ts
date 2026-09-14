@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { WebhookVerificationError } from "./errors.js";
 import {
   CONNECTION_EVENTS,
@@ -128,6 +128,8 @@ export function parseSignatureHeader(
     if (key === "t") {
       // Whole unix seconds only: no fractions, exponents or signs.
       if (!/^\d{1,12}$/.test(value)) return null;
+      // Exactly one timestamp: a second t= makes the signed time ambiguous.
+      if (timestamp !== null) return null;
       timestamp = Number(value);
     } else if (key === "v1") {
       // Always a hex SHA-256 HMAC; anything else is refused before any hashing.
@@ -209,9 +211,9 @@ function isDate(value: string): boolean {
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
-  // Hash both sides to a fixed length first, so a candidate of the wrong length
-  // takes the same comparison path instead of returning early.
-  const left = createHash("sha256").update(a, "utf8").digest();
-  const right = createHash("sha256").update(b, "utf8").digest();
-  return timingSafeEqual(left, right);
+  // Both sides are 64-hex SHA-256 HMACs (parseSignatureHeader refuses anything
+  // else), so their 32 decoded bytes compare directly in constant time.
+  const left = Buffer.from(a, "hex");
+  const right = Buffer.from(b, "hex");
+  return left.length === 32 && right.length === 32 && timingSafeEqual(left, right);
 }

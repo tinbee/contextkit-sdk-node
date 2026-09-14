@@ -372,6 +372,25 @@ describe("verifyWebhook", () => {
     },
   );
 
+  it("refuses a header with more than one timestamp", () => {
+    const sig = "a".repeat(64);
+    expect(parseSignatureHeader(`t=1800000000,t=1800000001,v1=${sig}`)).toBeNull();
+    expect(parseSignatureHeader(`t=1800000000,v1=${sig}`)).toEqual({
+      timestamp: 1800000000,
+      signatures: [sig],
+    });
+  });
+
+  it("accepts an upper-case hex signature", async () => {
+    const header = signWebhook(ruleBody, SECRET, NOW).replace(
+      /v1=([0-9a-f]+)/,
+      (_m, hex: string) => `v1=${hex.toUpperCase()}`,
+    );
+    await expect(
+      verifyWebhook({ rawBody: ruleBody, signature: header, secret: SECRET, now: NOW }),
+    ).resolves.toBeDefined();
+  });
+
   it("signWebhook refuses an empty secret list", () => {
     expect(() => signWebhook("{}", [], NOW)).toThrow(/at least one secret/);
   });
