@@ -52,6 +52,7 @@
     "test": "jest",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "local-ci": "bash scripts/local-ci.sh",
     "prepare": "husky",
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
   },

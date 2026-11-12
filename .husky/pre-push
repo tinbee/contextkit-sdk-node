@@ -1,0 +1,10 @@
+#!/bin/sh
+# local-ci: refuse a push whose commit has not passed `pnpm local-ci` (or been accepted).
+# GitHub CI still runs on the push; this keeps the review rounds before it.
+# Bypass: git push --no-verify.
+h="$(git rev-parse --show-toplevel)/scripts/local-ci.sh"
+if [ ! -x "$h" ]; then
+  echo "local-ci: this branch has no scripts/local-ci.sh, so the push is not checked" >&2
+  exit 0
+fi
+exec "$h" pre-push "$@"

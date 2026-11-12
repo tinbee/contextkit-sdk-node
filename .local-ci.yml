@@ -1,0 +1,12 @@
+# local-ci (pnpm local-ci): this repo's CI checks, then the cold-context review, run on a
+# commit before it is pushed. The runner is tinbee/ci-workflows local-ci/ at v1; it reads
+# node-pnpm-ci's inputs from .github/workflows/ci.yml. This file is only what that cannot tell it.
+#
+# Every ci.yml job is listed: a job ci.yml gains stops the run until it is added here, so a
+# local pass always says which required checks it stands for.
+jobs:
+  # node-pnpm-ci.yml: no settings.
+  ci: {}
+
+  # Inline in ci.yml: local-ci runs its own step (jq and grep over the ruleset and ci.yml).
+  ruleset-drift: {}
